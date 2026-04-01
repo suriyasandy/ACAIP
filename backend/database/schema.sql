@@ -44,7 +44,19 @@ CREATE TABLE IF NOT EXISTS breaks (
     first_seen_date             DATE,
     last_seen_date              DATE,
     status                      VARCHAR,
-    load_ts                     TIMESTAMP DEFAULT current_timestamp
+    load_ts                     TIMESTAMP DEFAULT current_timestamp,
+    -- D3S/Real MI extended fields
+    entity                      VARCHAR,
+    team                        VARCHAR,
+    account_group               VARCHAR,
+    high_level_product          VARCHAR,
+    cash_non_cash               VARCHAR,
+    rag_rating                  VARCHAR,
+    true_systemic               VARCHAR,
+    journals_posted             VARCHAR,
+    root_cause_identified       VARCHAR,
+    epic_desc                   VARCHAR,
+    ml_rag_prediction           VARCHAR
 );
 
 CREATE INDEX IF NOT EXISTS idx_breaks_source   ON breaks(source_system);
@@ -121,6 +133,7 @@ CREATE TABLE IF NOT EXISTS model_training_log (
     run_id          VARCHAR PRIMARY KEY,
     run_ts          TIMESTAMP DEFAULT current_timestamp,
     asset_class     VARCHAR,
+    model_type      VARCHAR DEFAULT 'material',
     n_train         INTEGER,
     accuracy        DOUBLE,
     precision_score DOUBLE,

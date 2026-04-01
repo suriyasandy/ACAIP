@@ -29,6 +29,27 @@ def init_db():
                 if "already exists" not in str(e).lower():
                     raise
 
+    # Migrate existing DBs: add new columns if they don't exist yet
+    _NEW_BREAK_COLS = [
+        ("entity", "VARCHAR"), ("team", "VARCHAR"), ("account_group", "VARCHAR"),
+        ("high_level_product", "VARCHAR"), ("cash_non_cash", "VARCHAR"),
+        ("rag_rating", "VARCHAR"), ("true_systemic", "VARCHAR"),
+        ("journals_posted", "VARCHAR"), ("root_cause_identified", "VARCHAR"),
+        ("epic_desc", "VARCHAR"), ("ml_rag_prediction", "VARCHAR"),
+    ]
+    for col, dtype in _NEW_BREAK_COLS:
+        try:
+            conn.execute(f"ALTER TABLE breaks ADD COLUMN IF NOT EXISTS {col} {dtype}")
+        except Exception:
+            pass  # DuckDB may not support IF NOT EXISTS on older builds — ignore
+
+    _NEW_LOG_COLS = [("model_type", "VARCHAR")]
+    for col, dtype in _NEW_LOG_COLS:
+        try:
+            conn.execute(f"ALTER TABLE model_training_log ADD COLUMN IF NOT EXISTS {col} {dtype}")
+        except Exception:
+            pass
+
 
 def upsert_breaks(df: pd.DataFrame):
     if df.empty:

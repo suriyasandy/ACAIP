@@ -40,15 +40,28 @@ def _age_bucket(age: int) -> str:
     return "30d+"
 
 
+def _to_bool(val) -> bool:
+    """Coerce Yes/No/True/False/1/0 strings to Python bool."""
+    if isinstance(val, bool):
+        return val
+    if pd.isna(val):
+        return False
+    return str(val).strip().lower() in ("yes", "y", "true", "1", "x")
+
+
 def _enrich(df: pd.DataFrame, upload_type: str, rec_meta: dict) -> pd.DataFrame:
-    """Apply derived columns to a DataFrame that already uses schema column names."""
+    """Apply derived columns to a DataFrame that already uses schema column names.
+
+    File-supplied values for abs_gbp, age_days, age_bucket are respected (not recalculated)
+    when they are already present and non-null in the mapped DataFrame.
+    """
     today = date.today()
 
     # ── trade_ref ──────────────────────────────────────────────────────────
     if "trade_ref" not in df.columns:
         df["trade_ref"] = [f"TR-{uuid.uuid4().hex[:8].upper()}" for _ in range(len(df))]
     else:
-        mask = df["trade_ref"].isna() | (df["trade_ref"].str.strip() == "")
+        mask = df["trade_ref"].isna() | (df["trade_ref"].astype(str).str.strip() == "")
         df.loc[mask, "trade_ref"] = [f"TR-{uuid.uuid4().hex[:8].upper()}" for _ in range(mask.sum())]
 
     # ── rec metadata ─────────────────────────────────────────────────────
@@ -58,7 +71,7 @@ def _enrich(df: pd.DataFrame, upload_type: str, rec_meta: dict) -> pd.DataFrame:
             val = rec_meta.get(key)
             if val:
                 df[key] = val
-    # For monthly_mi: keep whatever was mapped from the file; fill nulls with UNKNOWN
+    # For monthly_mi: keep whatever was mapped from the file; fill nulls with None
     for col in ("rec_id", "source_system", "rec_name"):
         if col not in df.columns:
             df[col] = None
@@ -88,24 +101,46 @@ def _enrich(df: pd.DataFrame, upload_type: str, rec_meta: dict) -> pd.DataFrame:
 
     df["last_seen_date"] = df["report_date"]
 
-    # ── FX + abs_gbp ─────────────────────────────────────────────────────
-    def _row_fx(row):
-        return get_fx_rate(str(row["break_ccy"]), row["report_date"])
+    # ── abs_gbp: use file value if supplied, else calculate via FX ────────
+    file_has_abs_gbp = (
+        "abs_gbp" in df.columns
+        and pd.to_numeric(df["abs_gbp"], errors="coerce").notna().any()
+    )
+    if file_has_abs_gbp:
+        df["abs_gbp"] = pd.to_numeric(df["abs_gbp"], errors="coerce").fillna(0.0)
+        df["fx_rate"] = 1.0  # unknown; mark as 1.0
+    else:
+        def _row_fx(row):
+            return get_fx_rate(str(row["break_ccy"]), row["report_date"])
+        df["fx_rate"] = df.apply(_row_fx, axis=1)
+        df["abs_gbp"] = (df["break_value"].abs() * df["fx_rate"]).round(2)
 
-    df["fx_rate"] = df.apply(_row_fx, axis=1)
-    df["abs_gbp"] = (df["break_value"].abs() * df["fx_rate"]).round(2)
-
-    # ── age ────────────────────────────────────────────────────────────
-    if "age_days" not in df.columns or df["age_days"].isna().all():
+    # ── age ────────────────────────────────────────────────────────────────
+    file_has_age = (
+        "age_days" in df.columns
+        and pd.to_numeric(df["age_days"], errors="coerce").notna().any()
+    )
+    if file_has_age:
+        df["age_days"] = pd.to_numeric(df["age_days"], errors="coerce").fillna(0).astype(int)
+    else:
         df["age_days"] = df["first_seen_date"].apply(
             lambda d: (today - d).days if pd.notna(d) else 0
         )
-    df["age_days"] = pd.to_numeric(df["age_days"], errors="coerce").fillna(0).astype(int)
-    df["age_bucket"] = df["age_days"].apply(_age_bucket)
+        df["age_days"] = df["age_days"].astype(int)
+
+    # age_bucket: use file value (Bucket column) if present, else derive
+    file_has_bucket = (
+        "age_bucket" in df.columns
+        and df["age_bucket"].notna().any()
+        and (df["age_bucket"].astype(str).str.strip() != "").any()
+    )
+    if not file_has_bucket:
+        df["age_bucket"] = df["age_days"].apply(_age_bucket)
+
     df["day_of_month"] = pd.to_datetime(df["report_date"]).dt.day
     df["period"] = pd.to_datetime(df["report_date"]).dt.strftime("%Y-%m")
 
-    # ── per-asset-class flags (vectorised where possible) ────────────────
+    # ── per-asset-class flags ─────────────────────────────────────────────
     def _flags(row):
         ac = row.get("asset_class", "CEQ") or "CEQ"
         threshold = THRESHOLD_ABS_GBP.get(ac, 300_000)
@@ -127,6 +162,11 @@ def _enrich(df: pd.DataFrame, upload_type: str, rec_meta: dict) -> pd.DataFrame:
     for col in flags.columns:
         df[col] = flags[col]
 
+    # ── boolean coercions ─────────────────────────────────────────────────
+    for bool_col in ("fix_required", "bs_cert_ready", "root_cause_identified"):
+        if bool_col in df.columns:
+            df[bool_col] = df[bool_col].apply(_to_bool)
+
     # ── defaults for remaining nullable fields ────────────────────────────
     for col, default in [
         ("status", "OPEN"),
@@ -136,20 +176,32 @@ def _enrich(df: pd.DataFrame, upload_type: str, rec_meta: dict) -> pd.DataFrame:
         ("cross_platform_match", False),
         ("bs_cert_ready", False),
         ("ml_risk_score", None),
+        ("ml_rag_prediction", None),
         ("thematic", None),
         ("jira_ref", None),
         ("jira_desc", None),
         ("epic", None),
+        # New D3S/MI extended fields
+        ("entity", None),
+        ("team", None),
+        ("account_group", None),
+        ("high_level_product", None),
+        ("cash_non_cash", None),
+        ("rag_rating", None),
+        ("true_systemic", None),
+        ("journals_posted", None),
+        ("root_cause_identified", None),
+        ("epic_desc", None),
     ]:
         if col not in df.columns:
             df[col] = default
 
-    # Fill epic from asset_class if still missing
+    # Fill epic from asset_class if still blank
     def _epic(row):
-        if row.get("epic"):
+        if row.get("epic") and str(row["epic"]).strip():
             return row["epic"]
         ac = row.get("asset_class") or "CEQ"
-        return f"{ac[:3].upper()}-BREAKS"
+        return f"{str(ac)[:3].upper()}-BREAKS"
     df["epic"] = df.apply(_epic, axis=1)
 
     return df
@@ -249,40 +301,49 @@ def commit():
         rows_loaded = upsert_breaks(final_df)
 
         # Post-ingest inference for daily_break
+        rag_predictions = {}
         asset_class = rec_meta.get("asset_class") if upload_type == "daily_break" else None
+        if not asset_class and "asset_class" in final_df.columns:
+            # Best-effort: use most common asset_class in the file
+            asset_class = final_df["asset_class"].mode().iloc[0] if not final_df["asset_class"].isna().all() else None
         if asset_class:
             try:
-                from backend.ml.trainer import score_new_breaks, _model_path
-                mpath = _model_path(asset_class)
-                if os.path.exists(mpath):
-                    scored = score_new_breaks(final_df, asset_class)
-                    if "ml_risk_score" in scored.columns and "trade_ref" in scored.columns:
-                        conn = get_conn()
-                        # Update scores for the rows we just inserted
-                        rec_id_val = rec_meta.get("rec_id")
-                        update_pairs = []
-                        for _, row in scored.iterrows():
-                            score = row.get("ml_risk_score")
-                            if score is not None and pd.notna(score):
-                                update_pairs.append((float(score), str(row["trade_ref"]),
-                                                     str(rec_id_val) if rec_id_val else None))
-                        if update_pairs:
-                            for score, tref, rid in update_pairs:
-                                if rid:
-                                    conn.execute(
-                                        "UPDATE breaks SET ml_risk_score = ? WHERE trade_ref = ? AND rec_id = ?",
-                                        [score, tref, rid]
-                                    )
-                                else:
-                                    conn.execute(
-                                        "UPDATE breaks SET ml_risk_score = ? WHERE trade_ref = ?",
-                                        [score, tref]
-                                    )
-                        rows_scored = len(update_pairs)
-                        valid_scores = scored["ml_risk_score"].dropna()
-                        avg_risk_score = round(float(valid_scores.mean()), 4) if len(valid_scores) else None
-                        inference_run = True
-            except Exception as ie:
+                from backend.ml.trainer import score_new_breaks
+                scored = score_new_breaks(final_df.copy(), asset_class)
+                conn = get_conn()
+                rec_id_val = rec_meta.get("rec_id") if upload_type == "daily_break" else None
+                rows_scored_count = 0
+
+                for _, row in scored.iterrows():
+                    tref = str(row.get("trade_ref", ""))
+                    risk_score = row.get("ml_risk_score")
+                    rag_pred   = row.get("ml_rag_prediction")
+                    if not tref:
+                        continue
+                    if risk_score is not None and pd.notna(risk_score):
+                        if rec_id_val:
+                            conn.execute(
+                                "UPDATE breaks SET ml_risk_score = ?, ml_rag_prediction = ? WHERE trade_ref = ? AND rec_id = ?",
+                                [float(risk_score), rag_pred, tref, rec_id_val]
+                            )
+                        else:
+                            conn.execute(
+                                "UPDATE breaks SET ml_risk_score = ?, ml_rag_prediction = ? WHERE trade_ref = ?",
+                                [float(risk_score), rag_pred, tref]
+                            )
+                        rows_scored_count += 1
+
+                rows_scored = rows_scored_count
+                valid_scores = scored["ml_risk_score"].dropna() if "ml_risk_score" in scored.columns else pd.Series(dtype=float)
+                avg_risk_score = round(float(valid_scores.mean()), 4) if len(valid_scores) else None
+
+                if "ml_rag_prediction" in scored.columns:
+                    for lbl in ("R", "A", "G"):
+                        rag_predictions[lbl] = int((scored["ml_rag_prediction"] == lbl).sum())
+
+                if rows_scored_count > 0:
+                    inference_run = True
+            except Exception:
                 traceback.print_exc()
 
         # Save YAML mapping
@@ -325,6 +386,7 @@ def commit():
         "inference_run": inference_run,
         "rows_scored": rows_scored,
         "avg_risk_score": avg_risk_score,
+        "rag_predictions": rag_predictions,
         "mapping_saved": mapping_saved_path,
         "status": status,
     })

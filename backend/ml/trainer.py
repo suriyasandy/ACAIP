@@ -208,3 +208,33 @@ def get_model_status() -> list[dict]:
             "last_status": last_run.get("status"),
         })
     return rows
+
+
+def score_new_breaks(df: pd.DataFrame, asset_class: str) -> pd.DataFrame:
+    """Score a DataFrame of new breaks with the trained model for the given asset class.
+
+    Returns the same DataFrame with the ml_risk_score column added/updated.
+    Does NOT write to the database – the caller handles DB updates.
+    Returns df unchanged if no model exists for the asset class.
+    """
+    mpath = _model_path(asset_class)
+    if not os.path.exists(mpath):
+        return df
+    try:
+        bundle = joblib.load(mpath)
+        clf = bundle["model"]
+        feat_cols = bundle["feature_cols"]
+
+        X = _build_features(df)
+        for col in feat_cols:
+            if col not in X.columns:
+                X[col] = 0
+        X = X[feat_cols]
+
+        proba = clf.predict_proba(X)
+        risk_scores = proba[:, 1] if proba.shape[1] > 1 else proba[:, 0]
+        df = df.copy()
+        df["ml_risk_score"] = risk_scores
+    except Exception:
+        traceback.print_exc()
+    return df

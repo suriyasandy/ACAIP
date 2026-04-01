@@ -1,0 +1,14 @@
+active: true
+asset_class: Loans & Deposits
+d3s_asset_class: null
+emir_flag: false
+escalation_sla_days: 5
+jira_epic: LND-BREAKS
+ml_model_id: rf_lnd
+rec_id: TLM_REC_084
+rec_name: Subordinated Debt Recon
+self_correct_days: 0
+source_platform: TLM
+threshold_abs_gbp: 500000
+threshold_pct: 0.001
+threshold_type: HYBRID

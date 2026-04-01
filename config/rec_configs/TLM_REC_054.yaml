@@ -1,0 +1,14 @@
+active: true
+asset_class: OTC Derivatives
+d3s_asset_class: null
+emir_flag: true
+escalation_sla_days: 1
+jira_epic: OTC-BREAKS
+ml_model_id: rf_otc
+rec_id: TLM_REC_054
+rec_name: Bond Future Recon
+self_correct_days: 0
+source_platform: TLM
+threshold_abs_gbp: 250000
+threshold_pct: 0.0005
+threshold_type: HYBRID

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  LineChart, Line, CartesianGrid, Legend,
+  LineChart, Line, CartesianGrid, Legend, Cell,
 } from "recharts";
 import { getThemeSummary, getThemeTrend } from "../api.js";
 import Section from "../components/Section.jsx";
@@ -68,7 +68,7 @@ export default function ThemesPage() {
               />
               <Bar dataKey="total_gbp" name="GBP" radius={[0, 4, 4, 0]}>
                 {themes.slice(0, 10).map((_, i) => (
-                  <rect key={i} fill={COLORS[i % COLORS.length]} />
+                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
                 ))}
               </Bar>
             </BarChart>

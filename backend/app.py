@@ -12,6 +12,8 @@ from backend.api.jira import jira_bp
 from backend.api.themes import themes_bp
 from backend.api.pipeline_api import pipeline_api_bp
 from backend.api.schema_api import schema_api_bp
+from backend.api.feedback import feedback_bp
+from backend.api.inference import inference_bp
 
 
 def create_app():
@@ -26,7 +28,8 @@ def create_app():
 
     # Register blueprints
     for bp in [upload_bp, dashboard_bp, breaks_bp, recs_bp,
-               jira_bp, themes_bp, pipeline_api_bp, schema_api_bp]:
+               jira_bp, themes_bp, pipeline_api_bp, schema_api_bp,
+               feedback_bp, inference_bp]:
         app.register_blueprint(bp)
 
     @app.route("/api/health")

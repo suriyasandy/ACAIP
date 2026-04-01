@@ -9,6 +9,7 @@ so inference at daily-break upload time works without the MI-only outcome column
 
 Models saved as joblib files under ML_MODELS_DIR.
 """
+import json
 import os
 import uuid
 import traceback
@@ -114,6 +115,25 @@ def _train_one(ac: str, model_type: str = "material") -> dict:
             rag_map = {"RED": "R", "AMBER": "A", "GREEN": "G", "R": "R", "A": "A", "G": "G"}
             y = df["rag_rating"].str.strip().str.upper().map(rag_map).fillna("G")
 
+            # Phase 2D: apply feedback overrides (approved = keep prediction, reject = use actual_label)
+            try:
+                fb = query_df(
+                    """
+                    SELECT pf.trade_ref, pf.actual_label, pf.feedback_type
+                    FROM prediction_feedback pf
+                    WHERE pf.model_type = 'rag' AND pf.feedback_type = 'reject'
+                      AND pf.actual_label IS NOT NULL AND pf.actual_label != ''
+                    """
+                )
+                if not fb.empty:
+                    fb_map = dict(zip(fb["trade_ref"], fb["actual_label"].str.strip().str.upper().map(rag_map)))
+                    if "trade_ref" in df.columns:
+                        override_mask = df["trade_ref"].isin(fb_map)
+                        y = y.copy()
+                        y[override_mask] = df.loc[override_mask, "trade_ref"].map(fb_map)
+            except Exception:
+                pass  # feedback table may not exist on older DBs
+
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.2, random_state=42,
             stratify=y if y.nunique() > 1 else None
@@ -209,9 +229,16 @@ def score_all_breaks():
                     if col not in Xa.columns:
                         Xa[col] = 0
                 Xa = Xa[feat_cols]
+                proba = clf.predict_proba(Xa)
                 rag_preds = clf.predict(Xa).tolist()
-                updates = list(zip(rag_preds, df["id"].tolist()))
-                conn.executemany("UPDATE breaks SET ml_rag_prediction = ? WHERE id = ?", updates)
+                confidence = proba.max(axis=1).tolist()
+                importances = dict(zip(feat_cols, clf.feature_importances_))
+                top3_str = json.dumps([f for f, _ in sorted(importances.items(), key=lambda x: -x[1])[:3]])
+                updates = list(zip(rag_preds, confidence, [top3_str] * len(rag_preds), df["id"].tolist()))
+                conn.executemany(
+                    "UPDATE breaks SET ml_rag_prediction = ?, ml_confidence = ?, ml_top_features = ? WHERE id = ?",
+                    updates,
+                )
             except Exception:
                 traceback.print_exc()
 
@@ -252,7 +279,8 @@ def get_model_status() -> list[dict]:
 def score_new_breaks(df: pd.DataFrame, asset_class: str) -> pd.DataFrame:
     """Score a DataFrame of new breaks using the material + RAG models.
 
-    Returns the same DataFrame with ml_risk_score and ml_rag_prediction added.
+    Returns the same DataFrame with ml_risk_score, ml_rag_prediction,
+    ml_confidence, and ml_top_features added.
     Columns not present in the training feature set are padded with 0.
     Returns df unchanged if no models exist for the asset class.
     """
@@ -284,7 +312,17 @@ def score_new_breaks(df: pd.DataFrame, asset_class: str) -> pd.DataFrame:
                 if col not in Xa.columns:
                     Xa[col] = 0
             Xa = Xa[feat_cols]
+            proba = clf.predict_proba(Xa)
             df["ml_rag_prediction"] = clf.predict(Xa)
+
+            # Phase 2A: confidence = max class probability for RAG prediction
+            df["ml_confidence"] = proba.max(axis=1)
+
+            # Phase 2A: top-3 feature drivers (global RF feature importances)
+            importances = dict(zip(feat_cols, clf.feature_importances_))
+            top3 = [f for f, _ in sorted(importances.items(), key=lambda x: -x[1])[:3]]
+            top3_str = json.dumps(top3)
+            df["ml_top_features"] = top3_str
         except Exception:
             traceback.print_exc()
 

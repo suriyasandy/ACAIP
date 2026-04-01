@@ -2,17 +2,18 @@ import React, { useState } from "react";
 import { Outlet, NavLink } from "react-router-dom";
 import {
   LayoutDashboard, ListFilter, FileText, Tag, BarChart2, Menu, X,
-  UploadCloud, Brain,
+  UploadCloud, Brain, Zap,
 } from "lucide-react";
 
 const NAV = [
-  { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
-  { to: "/breaks",    icon: ListFilter,      label: "Breaks" },
-  { to: "/recs",      icon: BarChart2,       label: "Reconciliations" },
-  { to: "/jira",      icon: FileText,        label: "Jira" },
-  { to: "/themes",    icon: Tag,             label: "Themes" },
-  { to: "/upload",    icon: UploadCloud,     label: "Upload" },
-  { to: "/training",  icon: Brain,           label: "ML Training" },
+  { to: "/dashboard",   icon: LayoutDashboard, label: "Dashboard" },
+  { to: "/breaks",      icon: ListFilter,      label: "Breaks" },
+  { to: "/recs",        icon: BarChart2,       label: "Reconciliations" },
+  { to: "/jira",        icon: FileText,        label: "Jira" },
+  { to: "/themes",      icon: Tag,             label: "Themes" },
+  { to: "/inferencing", icon: Zap,             label: "Inferencing" },
+  { to: "/upload",      icon: UploadCloud,     label: "Upload" },
+  { to: "/training",    icon: Brain,           label: "ML Training" },
 ];
 
 const s = {

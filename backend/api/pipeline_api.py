@@ -1,5 +1,5 @@
 """Pipeline control endpoints."""
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from backend.database.duckdb_manager import query_df
 
 pipeline_api_bp = Blueprint("pipeline_api", __name__)
@@ -42,3 +42,17 @@ def score():
     from backend.ml.trainer import score_all_breaks
     score_all_breaks()
     return jsonify({"status": "complete", "message": "ml_risk_score updated on all breaks"})
+
+
+@pipeline_api_bp.route("/api/pipeline/update-thresholds", methods=["POST"])
+def update_thresholds():
+    """Recompute dynamic GBP thresholds from rolling 28-day break data and persist to rec_configs."""
+    from backend.ml.dynamic_threshold import compute_dynamic_thresholds, apply_dynamic_thresholds
+    lookback = int(request.get_json(force=True, silent=True).get("lookback_days", 28) if request.data else 28)
+    thresholds = compute_dynamic_thresholds(lookback_days=lookback)
+    updated_recs = apply_dynamic_thresholds(thresholds)
+    return jsonify({
+        "status": "complete",
+        "thresholds": thresholds,
+        "updated_rec_configs": updated_recs,
+    })

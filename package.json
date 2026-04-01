@@ -1,0 +1,14 @@
+{
+  "name": "acaip-dashboard",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "concurrently \"python backend/app.py\" \"cd frontend && npm run dev\"",
+    "frontend": "cd frontend && npm run dev",
+    "backend": "python backend/app.py",
+    "install:frontend": "cd frontend && npm install",
+    "build": "cd frontend && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

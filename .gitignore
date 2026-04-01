@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Data files - keep samples but ignore the DB
+data/break_ledger.duckdb
+data/uploads/
+
+# Frontend build
+frontend/node_modules/
+frontend/dist/
+
+# Env
+.env
+
+# ML models (regenerate via generate_all.py)
+backend/ml/models/*.pkl
+backend/ml/models/*.gitkeep
+
+# OS
+.DS_Store

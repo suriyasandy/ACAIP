@@ -149,7 +149,6 @@ export default function Dashboard() {
                 labelStyle={{ color: "#94a3b8" }}
               />
               <Bar dataKey="break_count" name="Breaks" fill="#38bdf8" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="total_gbp"   name="GBP" fill="#f59e0b" radius={[4, 4, 0, 0]} yAxisId="right" hide />
             </BarChart>
           </ResponsiveContainer>
         </Section>
@@ -187,7 +186,7 @@ export default function Dashboard() {
                 innerRadius={55}
                 outerRadius={85}
                 paddingAngle={3}
-                label={({ platform: p, percent }) => `${p} ${(percent * 100).toFixed(0)}%`}
+                label={({ name, percent }) => percent > 0 ? `${name} ${(percent * 100).toFixed(0)}%` : ""}
                 labelLine={false}
               >
                 {platform.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}

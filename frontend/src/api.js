@@ -33,7 +33,10 @@ export const getSummary           = (f) => get("/dashboard/summary", f);
 export const getPlatformBreakdown = (f) => get("/dashboard/platform-breakdown", f);
 export const getAgeProfile        = (f) => get("/dashboard/age-profile", f);
 export const getResolutionTrend   = (days) => get("/dashboard/resolution-trend", { days });
-export const getAssetClassBreakdown = () => get("/dashboard/asset-class-breakdown");
+export const getAssetClassBreakdown  = () => get("/dashboard/asset-class-breakdown");
+export const getRagBreakdown         = (f) => get("/dashboard/rag-breakdown", f || {});
+export const getTrueSystemicBreakdown = (f) => get("/dashboard/true-systemic", f || {});
+export const getTeamBreakdown        = () => get("/dashboard/team-breakdown");
 
 // ── Breaks ───────────────────────────────────────────────────────────────────
 export const getBreaks        = (params) => get("/breaks", params);

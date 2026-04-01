@@ -304,3 +304,64 @@ def get_jira_coverage_by_asset():
         ORDER BY coverage_pct DESC
     """
     return query_df(sql).to_dict(orient="records")
+
+
+def get_rag_breakdown(platform=None, asset_class=None, date_from=None, date_to=None):
+    """Count breaks by RAG rating (R/A/G) with GBP totals."""
+    where, params = _where(platform, asset_class, date_from, date_to,
+                           extra="AND rag_rating IS NOT NULL AND rag_rating != ''")
+    sql = f"""
+        SELECT
+            COALESCE(UPPER(TRIM(rag_rating)), 'UNKNOWN') AS rag_rating,
+            COUNT(*) AS break_count,
+            COALESCE(SUM(abs_gbp), 0) AS total_gbp,
+            COUNT(*) FILTER (WHERE material_flag = TRUE) AS material_count
+        FROM breaks
+        {where}
+        GROUP BY COALESCE(UPPER(TRIM(rag_rating)), 'UNKNOWN')
+        ORDER BY
+            CASE COALESCE(UPPER(TRIM(rag_rating)), 'UNKNOWN')
+                WHEN 'R' THEN 1 WHEN 'A' THEN 2 WHEN 'G' THEN 3 ELSE 4 END
+    """
+    return query_df(sql, params or None).to_dict(orient="records")
+
+
+def get_true_systemic_breakdown(asset_class=None):
+    """Count True vs Systemic breaks per asset class."""
+    clauses, params = [], []
+    if asset_class:
+        phs = ", ".join(["?" for _ in asset_class])
+        clauses.append(f"asset_class IN ({phs})")
+        params.extend(asset_class)
+    clauses.append("true_systemic IS NOT NULL AND true_systemic != ''")
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    sql = f"""
+        SELECT
+            asset_class,
+            TRIM(true_systemic) AS true_systemic,
+            COUNT(*) AS break_count,
+            COALESCE(SUM(abs_gbp), 0) AS total_gbp
+        FROM breaks
+        {where}
+        GROUP BY asset_class, TRIM(true_systemic)
+        ORDER BY asset_class, break_count DESC
+    """
+    return query_df(sql, params or None).to_dict(orient="records")
+
+
+def get_team_breakdown():
+    """GBP exposure and break count grouped by team."""
+    sql = """
+        SELECT
+            COALESCE(NULLIF(TRIM(team), ''), source_system, 'Unknown') AS team,
+            COUNT(*) AS break_count,
+            COALESCE(SUM(abs_gbp), 0) AS total_gbp,
+            COUNT(*) FILTER (WHERE material_flag = TRUE) AS material_count,
+            COUNT(*) FILTER (WHERE rag_rating = 'R') AS rag_red_count,
+            ROUND(AVG(age_days), 1) AS avg_age
+        FROM breaks
+        GROUP BY COALESCE(NULLIF(TRIM(team), ''), source_system, 'Unknown')
+        ORDER BY total_gbp DESC
+        LIMIT 20
+    """
+    return query_df(sql).to_dict(orient="records")

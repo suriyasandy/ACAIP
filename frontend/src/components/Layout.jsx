@@ -1,19 +1,11 @@
 import React, { useState } from "react";
 import { Outlet, NavLink } from "react-router-dom";
-import {
-  LayoutDashboard, ListFilter, FileText, Tag, BarChart2, Menu, X,
-  UploadCloud, Brain, Zap,
-} from "lucide-react";
+import { LayoutDashboard, UploadCloud, AlertTriangle, Menu, X } from "lucide-react";
 
 const NAV = [
-  { to: "/dashboard",   icon: LayoutDashboard, label: "Dashboard" },
-  { to: "/breaks",      icon: ListFilter,      label: "Breaks" },
-  { to: "/recs",        icon: BarChart2,       label: "Reconciliations" },
-  { to: "/jira",        icon: FileText,        label: "Jira" },
-  { to: "/themes",      icon: Tag,             label: "Themes" },
-  { to: "/inferencing", icon: Zap,             label: "Inferencing" },
-  { to: "/upload",      icon: UploadCloud,     label: "Upload" },
-  { to: "/training",    icon: Brain,           label: "ML Training" },
+  { to: "/dashboard",  icon: LayoutDashboard, label: "Dashboard" },
+  { to: "/upload",     icon: UploadCloud,     label: "Upload" },
+  { to: "/validation", icon: AlertTriangle,   label: "Validation Report" },
 ];
 
 const s = {
@@ -69,13 +61,7 @@ const s = {
     whiteSpace: "nowrap",
     transition: "background 0.15s, color 0.15s",
   }),
-  main: {
-    flex: 1,
-    display: "flex",
-    flexDirection: "column",
-    overflow: "hidden",
-    minWidth: 0,
-  },
+  main: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 },
   topbar: {
     padding: "14px 24px",
     borderBottom: "1px solid #334155",
@@ -86,14 +72,7 @@ const s = {
     minHeight: 60,
   },
   title: { color: "#f1f5f9", fontWeight: 600, fontSize: 16 },
-  badge: {
-    background: "#0ea5e9",
-    color: "#fff",
-    borderRadius: 4,
-    fontSize: 11,
-    padding: "2px 7px",
-    fontWeight: 600,
-  },
+  badge: { background: "#0ea5e9", color: "#fff", borderRadius: 4, fontSize: 11, padding: "2px 7px", fontWeight: 600 },
   content: { flex: 1, overflow: "auto", padding: "24px" },
 };
 
@@ -107,7 +86,7 @@ export default function Layout() {
           <button style={s.toggle} onClick={() => setOpen((o) => !o)} title="Toggle sidebar">
             {open ? <X size={18} /> : <Menu size={18} />}
           </button>
-          {open && <span style={s.logoText}>ACAIP</span>}
+          {open && <span style={s.logoText}>Recon Dashboard</span>}
         </div>
         <nav style={s.nav}>
           {NAV.map(({ to, icon: Icon, label }) => (
@@ -119,15 +98,15 @@ export default function Layout() {
         </nav>
         {open && (
           <div style={{ padding: "12px 14px", color: "#475569", fontSize: 11 }}>
-            AI Break Management Platform
+            Break Aging & FX Dashboard
           </div>
         )}
       </aside>
 
       <main style={s.main}>
         <div style={s.topbar}>
-          <span style={s.title}>AI-Powered Break Management</span>
-          <span style={s.badge}>v1.0</span>
+          <span style={s.title}>Reconciliation Break Aging Dashboard</span>
+          <span style={s.badge}>Phase 1</span>
         </div>
         <div style={s.content}>
           <Outlet />

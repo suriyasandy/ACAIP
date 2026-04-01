@@ -104,7 +104,7 @@ def get_resolution_trend(days: int = 30):
             COUNT(*) FILTER (WHERE status = 'RESOLVED') AS resolved_count,
             COUNT(*) AS total
         FROM breaks
-        WHERE report_date >= current_date - INTERVAL (?) DAY
+        WHERE report_date >= current_date - CAST(? AS INTEGER) * INTERVAL '1' DAY
         GROUP BY report_date
         ORDER BY report_date
     """
@@ -254,7 +254,7 @@ def get_theme_trend(days: int = 30):
             COUNT(*) AS break_count
         FROM breaks
         WHERE thematic IS NOT NULL
-          AND report_date >= current_date - INTERVAL (?) DAY
+          AND report_date >= current_date - CAST(? AS INTEGER) * INTERVAL '1' DAY
         GROUP BY report_date, thematic
         ORDER BY report_date, break_count DESC
     """

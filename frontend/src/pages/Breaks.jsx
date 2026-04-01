@@ -6,9 +6,9 @@ const fmt = (n) => n == null ? "—" : Number(n).toLocaleString("en-GB", { maxim
 const fmtGBP = (n) => n == null ? "—" : "£" + Number(n).toLocaleString("en-GB", { maximumFractionDigits: 0 });
 
 const TAG_COLORS = {
-  OPEN:     { bg: "#fef2f2", color: "#b91c1c" },
-  CLOSED:   { bg: "#f0fdf4", color: "#166534" },
-  RESOLVED: { bg: "#eff6ff", color: "#1d4ed8" },
+  OPEN:     { background: "rgba(239,68,68,0.15)", color: "#fca5a5" },
+  CLOSED:   { background: "rgba(16,185,129,0.15)", color: "#6ee7b7" },
+  RESOLVED: { background: "rgba(56,189,248,0.15)", color: "#7dd3fc" },
 };
 
 function StatusBadge({ v }) {

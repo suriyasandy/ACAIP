@@ -6,6 +6,8 @@ import Breaks from "./pages/Breaks.jsx";
 import JiraPage from "./pages/Jira.jsx";
 import ThemesPage from "./pages/Themes.jsx";
 import RecsPage from "./pages/Recs.jsx";
+import Upload from "./pages/Upload.jsx";
+import ModelTraining from "./pages/ModelTraining.jsx";
 
 export default function App() {
   return (
@@ -18,6 +20,8 @@ export default function App() {
           <Route path="recs"      element={<RecsPage />} />
           <Route path="jira"      element={<JiraPage />} />
           <Route path="themes"    element={<ThemesPage />} />
+          <Route path="upload"    element={<Upload />} />
+          <Route path="training"  element={<ModelTraining />} />
         </Route>
       </Routes>
     </BrowserRouter>

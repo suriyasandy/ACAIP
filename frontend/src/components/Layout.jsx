@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Outlet, NavLink } from "react-router-dom";
 import {
   LayoutDashboard, ListFilter, FileText, Tag, BarChart2, Menu, X,
+  UploadCloud, Brain,
 } from "lucide-react";
 
 const NAV = [
@@ -10,10 +11,12 @@ const NAV = [
   { to: "/recs",      icon: BarChart2,       label: "Reconciliations" },
   { to: "/jira",      icon: FileText,        label: "Jira" },
   { to: "/themes",    icon: Tag,             label: "Themes" },
+  { to: "/upload",    icon: UploadCloud,     label: "Upload" },
+  { to: "/training",  icon: Brain,           label: "ML Training" },
 ];
 
 const s = {
-  shell: { display: "flex", minHeight: "100vh", background: "#0f172a" },
+  shell: { display: "flex", height: "100vh", background: "#0f172a", overflow: "hidden" },
   sidebar: (open) => ({
     width: open ? 220 : 64,
     background: "#1e293b",
@@ -70,6 +73,7 @@ const s = {
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
+    minWidth: 0,
   },
   topbar: {
     padding: "14px 24px",

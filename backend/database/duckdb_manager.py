@@ -97,6 +97,25 @@ def log_upload(upload_id, filename, file_type, source_detected,
           rows_received, rows_loaded, errors, status])
 
 
+def get_fx_rate(ccy: str, rate_date=None) -> float:
+    """Return the GBP rate for a currency on a given date (falls back to latest)."""
+    if ccy == "GBP":
+        return 1.0
+    pair = f"{ccy}/GBP"
+    conn = get_conn()
+    if rate_date:
+        row = conn.execute(
+            "SELECT rate FROM fx_rates WHERE ccy_pair = ? AND rate_date <= CAST(? AS DATE) ORDER BY rate_date DESC LIMIT 1",
+            [pair, str(rate_date)]
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT rate FROM fx_rates WHERE ccy_pair = ? ORDER BY rate_date DESC LIMIT 1",
+            [pair]
+        ).fetchone()
+    return float(row[0]) if row else 1.0
+
+
 def query_df(sql: str, params=None) -> pd.DataFrame:
     conn = get_conn()
     if params:

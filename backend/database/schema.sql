@@ -115,3 +115,16 @@ CREATE TABLE IF NOT EXISTS upload_log (
     upload_ts       TIMESTAMP DEFAULT current_timestamp,
     status          VARCHAR
 );
+
+-- ── ML Model Training Log ────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS model_training_log (
+    run_id          VARCHAR PRIMARY KEY,
+    run_ts          TIMESTAMP DEFAULT current_timestamp,
+    asset_class     VARCHAR,
+    n_train         INTEGER,
+    accuracy        DOUBLE,
+    precision_score DOUBLE,
+    recall_score    DOUBLE,
+    model_path      VARCHAR,
+    status          VARCHAR
+);

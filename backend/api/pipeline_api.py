@@ -1,15 +1,8 @@
 """Pipeline control endpoints."""
 from flask import Blueprint, jsonify
-from backend.pipeline.run_pipeline import run_on_db_data
 from backend.database.duckdb_manager import query_df
 
 pipeline_api_bp = Blueprint("pipeline_api", __name__)
-
-
-@pipeline_api_bp.route("/api/pipeline/run", methods=["POST"])
-def run():
-    run_on_db_data()
-    return jsonify({"status": "complete"})
 
 
 @pipeline_api_bp.route("/api/pipeline/status", methods=["GET"])
@@ -29,3 +22,23 @@ def status():
         "total_uploads": int(uploads["total_uploads"]),
         "last_upload": str(uploads["last_upload"]) if uploads["last_upload"] else None,
     })
+
+
+@pipeline_api_bp.route("/api/pipeline/train", methods=["POST"])
+def train():
+    from backend.ml.trainer import train_models
+    results = train_models()
+    return jsonify({"status": "complete", "results": results})
+
+
+@pipeline_api_bp.route("/api/pipeline/models", methods=["GET"])
+def models():
+    from backend.ml.trainer import get_model_status
+    return jsonify(get_model_status())
+
+
+@pipeline_api_bp.route("/api/pipeline/score", methods=["POST"])
+def score():
+    from backend.ml.trainer import score_all_breaks
+    score_all_breaks()
+    return jsonify({"status": "complete", "message": "ml_risk_score updated on all breaks"})

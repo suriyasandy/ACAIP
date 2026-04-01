@@ -12,90 +12,29 @@ async function get(path, params = {}) {
   return res.json();
 }
 
-async function post(path, body) {
-  const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
-    headers: body ? { "Content-Type": "application/json" } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) throw new Error(`API error ${res.status}`);
-  return res.json();
-}
-
-async function del(path) {
-  const res = await fetch(`${BASE}${path}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`API error ${res.status}`);
-  return res.json();
-}
-
 // ── Dashboard ────────────────────────────────────────────────────────────────
-export const getSummary           = (f) => get("/dashboard/summary", f);
-export const getPlatformBreakdown = (f) => get("/dashboard/platform-breakdown", f);
-export const getAgeProfile        = (f) => get("/dashboard/age-profile", f);
-export const getResolutionTrend   = (days) => get("/dashboard/resolution-trend", { days });
-export const getAssetClassBreakdown  = () => get("/dashboard/asset-class-breakdown");
-export const getRagBreakdown         = (f) => get("/dashboard/rag-breakdown", f || {});
-export const getTrueSystemicBreakdown = (f) => get("/dashboard/true-systemic", f || {});
-export const getTeamBreakdown        = () => get("/dashboard/team-breakdown");
+export const getKpis               = (f) => get("/dashboard/kpis", f || {});
+export const getAgeProfile         = (f) => get("/dashboard/age-profile", f || {});
+export const getProductBreakdown   = (f) => get("/dashboard/product-breakdown", f || {});
+export const getTrend              = (f) => get("/dashboard/trend", f || {});
+export const getValidationSummary  = ()  => get("/dashboard/validation-summary");
 
-// ── Breaks ───────────────────────────────────────────────────────────────────
-export const getBreaks        = (params) => get("/breaks", params);
-export const getMaterialBreaks = () => get("/breaks/material");
-export const getEmirBreaks    = () => get("/breaks/emir");
+// ── Validation ────────────────────────────────────────────────────────────────
+export const getValidationErrors = (params) => get("/validation/errors", params || {});
 
-// ── Recs ─────────────────────────────────────────────────────────────────────
-export const getRecs      = () => get("/recs");
-export const getRecDetail = (id) => get(`/recs/${id}`);
-
-// ── Jira ─────────────────────────────────────────────────────────────────────
-export const getJiraCoverage   = () => get("/jira/coverage");
-export const getJiraDrafts     = () => get("/jira/drafts");
-export const getJiraEpics      = () => get("/jira/epics");
-export const getJiraCoverageGap = () => get("/jira/coverage-gap");
-export const approveDraft      = (ref) => post(`/jira/approve/${ref}`);
-
-// ── Themes ───────────────────────────────────────────────────────────────────
-export const getThemeSummary   = () => get("/themes/summary");
-export const getThemeTrend     = (days) => get("/themes/trend", { days });
-export const getThemeCrosswalk = () => get("/themes/crosswalk");
-
-// ── Upload – two-step ────────────────────────────────────────────────────────
-export async function previewUpload(file) {
+// ── Upload ────────────────────────────────────────────────────────────────────
+export async function uploadFile(file) {
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch(`${BASE}/upload/preview`, { method: "POST", body: fd });
-  if (!res.ok) throw new Error(`Preview failed: ${res.status}`);
+  const res = await fetch(`${BASE}/upload`, { method: "POST", body: fd });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Upload failed: ${res.status}`);
+  }
   return res.json();
 }
 
-export const commitUpload = (body) => post("/upload/commit", body);
 export const getUploadLog = () => get("/upload/log");
 
-// ── Schema / Column mapping ───────────────────────────────────────────────────
-export const getSchemaColumns = () => get("/schema/columns");
-export const getMappings      = () => get("/schema/mappings");
-export const getMapping       = (name) => get(`/schema/mapping/${name}`);
-export const saveMapping      = (body) => post("/schema/mapping", body);
-export const deleteMapping    = (name) => del(`/schema/mapping/${name}`);
-
-// ── Pipeline / ML ─────────────────────────────────────────────────────────────
-export const getHealth            = () => get("/health");
-export const getPipelineStatus    = () => get("/pipeline/status");
-export const trainModels          = () => post("/pipeline/train");
-export const getModelStatus       = () => get("/pipeline/models");
-export const scoreBreaks          = () => post("/pipeline/score");
-export const updateDynamicThresholds = (lookback_days) => post("/pipeline/update-thresholds", { lookback_days: lookback_days || 28 });
-
-// ── Inferencing ───────────────────────────────────────────────────────────────
-export const getDailyInference    = (date, page, page_size) => get("/inference/daily", { date, page, page_size });
-export const getInferenceSummary  = (date) => get("/inference/summary", { date });
-
-// ── Feedback ──────────────────────────────────────────────────────────────────
-export const submitFeedback    = (body) => post("/feedback", body);
-export const getFeedback       = () => get("/feedback");
-export const getFeedbackSummary = () => get("/feedback/summary");
-
-// ── Rec Config ────────────────────────────────────────────────────────────────
-export const getRecConfigs  = () => get("/recs/config");
-export const saveRecConfig  = (body) => post("/recs/config", body);
-export const deleteRecConfig = (rec_id) => del(`/recs/config/${rec_id}`);
+// ── Config ────────────────────────────────────────────────────────────────────
+export const getSources = () => get("/config/sources");

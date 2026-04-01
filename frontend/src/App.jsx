@@ -2,13 +2,8 @@ import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Layout from "./components/Layout.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
-import Breaks from "./pages/Breaks.jsx";
-import JiraPage from "./pages/Jira.jsx";
-import ThemesPage from "./pages/Themes.jsx";
-import RecsPage from "./pages/Recs.jsx";
 import Upload from "./pages/Upload.jsx";
-import ModelTraining from "./pages/ModelTraining.jsx";
-import Inferencing from "./pages/Inferencing.jsx";
+import ValidationReport from "./pages/ValidationReport.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 
 function Guarded({ children }) {
@@ -21,14 +16,9 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard"   element={<Guarded><Dashboard /></Guarded>} />
-          <Route path="breaks"      element={<Guarded><Breaks /></Guarded>} />
-          <Route path="recs"        element={<Guarded><RecsPage /></Guarded>} />
-          <Route path="jira"        element={<Guarded><JiraPage /></Guarded>} />
-          <Route path="themes"      element={<Guarded><ThemesPage /></Guarded>} />
-          <Route path="inferencing" element={<Guarded><Inferencing /></Guarded>} />
-          <Route path="upload"      element={<Guarded><Upload /></Guarded>} />
-          <Route path="training"    element={<Guarded><ModelTraining /></Guarded>} />
+          <Route path="dashboard"  element={<Guarded><Dashboard /></Guarded>} />
+          <Route path="upload"     element={<Guarded><Upload /></Guarded>} />
+          <Route path="validation" element={<Guarded><ValidationReport /></Guarded>} />
         </Route>
       </Routes>
     </BrowserRouter>

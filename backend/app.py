@@ -1,19 +1,12 @@
 """Flask application factory."""
-import os
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 from backend.config import FLASK_PORT, CORS_ORIGIN
 from backend.database.duckdb_manager import init_db
 from backend.api.upload import upload_bp
 from backend.api.dashboard import dashboard_bp
-from backend.api.breaks import breaks_bp
-from backend.api.recs import recs_bp
-from backend.api.jira import jira_bp
-from backend.api.themes import themes_bp
-from backend.api.pipeline_api import pipeline_api_bp
-from backend.api.schema_api import schema_api_bp
-from backend.api.feedback import feedback_bp
-from backend.api.inference import inference_bp
+from backend.api.validation import validation_bp
+from backend.api.config_api import config_api_bp
 
 
 def create_app():
@@ -23,18 +16,13 @@ def create_app():
     CORS(app, origins=[CORS_ORIGIN, "http://localhost:5173",
                         "http://127.0.0.1:5173"])
 
-    # Initialise DB
     init_db()
 
-    # Register blueprints
-    for bp in [upload_bp, dashboard_bp, breaks_bp, recs_bp,
-               jira_bp, themes_bp, pipeline_api_bp, schema_api_bp,
-               feedback_bp, inference_bp]:
+    for bp in [upload_bp, dashboard_bp, validation_bp, config_api_bp]:
         app.register_blueprint(bp)
 
     @app.route("/api/health")
     def health():
-        from flask import jsonify
         return jsonify({"status": "ok"})
 
     return app

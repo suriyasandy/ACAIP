@@ -16,6 +16,7 @@ def get_conn() -> duckdb.DuckDBPyConnection:
 
 
 def init_db():
+    """Initialise schema from schema.sql (idempotent)."""
     sql_path = os.path.join(os.path.dirname(__file__), "schema.sql")
     with open(sql_path, "r") as f:
         sql = f.read()
@@ -29,145 +30,67 @@ def init_db():
                 if "already exists" not in str(e).lower():
                     raise
 
-    # Migrate existing DBs: add new columns if they don't exist yet
-    _NEW_BREAK_COLS = [
-        ("entity", "VARCHAR"), ("team", "VARCHAR"), ("account_group", "VARCHAR"),
-        ("high_level_product", "VARCHAR"), ("cash_non_cash", "VARCHAR"),
-        ("rag_rating", "VARCHAR"), ("true_systemic", "VARCHAR"),
-        ("journals_posted", "VARCHAR"), ("root_cause_identified", "VARCHAR"),
-        ("epic_desc", "VARCHAR"), ("ml_rag_prediction", "VARCHAR"),
-    ]
-    for col, dtype in _NEW_BREAK_COLS:
-        try:
-            conn.execute(f"ALTER TABLE breaks ADD COLUMN IF NOT EXISTS {col} {dtype}")
-        except Exception:
-            pass  # DuckDB may not support IF NOT EXISTS on older builds — ignore
 
-    _NEW_LOG_COLS = [("model_type", "VARCHAR")]
-    for col, dtype in _NEW_LOG_COLS:
-        try:
-            conn.execute(f"ALTER TABLE model_training_log ADD COLUMN IF NOT EXISTS {col} {dtype}")
-        except Exception:
-            pass
-
-    # Phase 2A: per-break confidence + feature drivers
-    _NEW_INFERENCE_COLS = [
-        ("ml_confidence", "DOUBLE"),
-        ("ml_top_features", "VARCHAR"),
-    ]
-    for col, dtype in _NEW_INFERENCE_COLS:
-        try:
-            conn.execute(f"ALTER TABLE breaks ADD COLUMN IF NOT EXISTS {col} {dtype}")
-        except Exception:
-            pass
-
-    # Phase 2D: prediction feedback table
-    try:
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS feedback_id_seq")
-    except Exception:
-        pass
-    try:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS prediction_feedback (
-                id              BIGINT DEFAULT nextval('feedback_id_seq') PRIMARY KEY,
-                break_id        BIGINT,
-                trade_ref       VARCHAR,
-                rec_id          VARCHAR,
-                model_type      VARCHAR,
-                predicted_label VARCHAR,
-                actual_label    VARCHAR,
-                feedback_type   VARCHAR,
-                feedback_ts     TIMESTAMP DEFAULT current_timestamp
-            )
-        """)
-    except Exception:
-        pass
-
-
-def upsert_breaks(df: pd.DataFrame):
+def insert_breaks(df: pd.DataFrame) -> int:
+    """Bulk-insert a DataFrame of breaks. Each file-date is an immutable snapshot."""
     if df.empty:
         return 0
     conn = get_conn()
-    conn.register("_upsert_breaks", df)
-    conn.execute("""
-        DELETE FROM breaks
-        WHERE EXISTS (
-            SELECT 1 FROM _upsert_breaks u
-            WHERE breaks.trade_ref = u.trade_ref
-              AND breaks.rec_id    = u.rec_id
-              AND breaks.report_date = u.report_date
-        )
-    """)
+    conn.register("_ins_breaks", df)
     cols = ", ".join(df.columns.tolist())
-    conn.execute(f"INSERT INTO breaks ({cols}) SELECT {cols} FROM _upsert_breaks")
-    conn.unregister("_upsert_breaks")
+    conn.execute(f"INSERT INTO breaks ({cols}) SELECT {cols} FROM _ins_breaks")
+    conn.unregister("_ins_breaks")
     return len(df)
 
 
-def upsert_jira(df: pd.DataFrame):
-    if df.empty:
+def insert_validation_errors(rows: list) -> int:
+    """Bulk-insert a list of validation error dicts."""
+    if not rows:
         return 0
+    df = pd.DataFrame(rows)
     conn = get_conn()
-    conn.register("_upsert_jira", df)
-    conn.execute("""
-        DELETE FROM jira_tickets
-        WHERE jira_ref IN (SELECT jira_ref FROM _upsert_jira)
-    """)
-    conn.execute("INSERT INTO jira_tickets SELECT * FROM _upsert_jira")
-    conn.unregister("_upsert_jira")
+    conn.register("_ins_val", df)
+    cols = ", ".join(df.columns.tolist())
+    conn.execute(f"INSERT INTO validation_errors ({cols}) SELECT {cols} FROM _ins_val")
+    conn.unregister("_ins_val")
     return len(df)
 
 
-def upsert_rec_configs(df: pd.DataFrame):
-    if df.empty:
-        return 0
-    conn = get_conn()
-    conn.register("_rec_cfg", df)
-    conn.execute("DELETE FROM rec_configs WHERE rec_id IN (SELECT rec_id FROM _rec_cfg)")
-    conn.execute("INSERT INTO rec_configs SELECT * FROM _rec_cfg")
-    conn.unregister("_rec_cfg")
-    return len(df)
-
-
-def load_fx_rates(df: pd.DataFrame):
-    if df.empty:
-        return
-    conn = get_conn()
-    conn.register("_fx", df)
-    conn.execute("DELETE FROM fx_rates WHERE ccy_pair IN (SELECT ccy_pair FROM _fx)")
-    conn.execute("INSERT INTO fx_rates SELECT * FROM _fx")
-    conn.unregister("_fx")
-
-
-def log_upload(upload_id, filename, file_type, source_detected,
-               rows_received, rows_loaded, errors, status):
+def log_upload(upload_id: str, filename: str, source_system: str, rec_id: str,
+               product: str, file_date, rows_received: int, rows_loaded: int,
+               error_count: int, warning_count: int, status: str, file_hash: str):
     conn = get_conn()
     conn.execute("""
         INSERT OR REPLACE INTO upload_log
-          (upload_id, filename, file_type, source_detected,
-           rows_received, rows_loaded, errors, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, [upload_id, filename, file_type, source_detected,
-          rows_received, rows_loaded, errors, status])
+            (upload_id, filename, source_system, rec_id, product, file_date,
+             rows_received, rows_loaded, error_count, warning_count, status, file_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, [upload_id, filename, source_system, rec_id, product, str(file_date) if file_date else None,
+          rows_received, rows_loaded, error_count, warning_count, status, file_hash])
 
 
-def get_fx_rate(ccy: str, rate_date=None) -> float:
-    """Return the GBP rate for a currency on a given date (falls back to latest)."""
-    if ccy == "GBP":
-        return 1.0
-    pair = f"{ccy}/GBP"
+def file_already_loaded(filename: str, file_hash: str) -> bool:
+    """Return True if a file with the same name AND hash was already successfully loaded."""
     conn = get_conn()
-    if rate_date:
-        row = conn.execute(
-            "SELECT rate FROM fx_rates WHERE ccy_pair = ? AND rate_date <= CAST(? AS DATE) ORDER BY rate_date DESC LIMIT 1",
-            [pair, str(rate_date)]
-        ).fetchone()
-    else:
-        row = conn.execute(
-            "SELECT rate FROM fx_rates WHERE ccy_pair = ? ORDER BY rate_date DESC LIMIT 1",
-            [pair]
-        ).fetchone()
-    return float(row[0]) if row else 1.0
+    row = conn.execute(
+        "SELECT COUNT(*) FROM upload_log WHERE filename = ? AND file_hash = ? AND status = 'OK'",
+        [filename, file_hash]
+    ).fetchone()
+    return bool(row and row[0] > 0)
+
+
+def update_recurring_flags():
+    """Mark all trade_ids that appear across multiple file_dates as recurring."""
+    conn = get_conn()
+    conn.execute("""
+        UPDATE breaks
+        SET recurring_flag = TRUE
+        WHERE trade_id IN (
+            SELECT trade_id FROM breaks
+            GROUP BY trade_id
+            HAVING COUNT(DISTINCT file_date) > 1
+        )
+    """)
 
 
 def query_df(sql: str, params=None) -> pd.DataFrame:

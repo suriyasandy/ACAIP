@@ -7,6 +7,7 @@ venv/
 
 # Data files - keep samples but ignore the DB
 data/break_ledger.duckdb
+data/break_ledger.duckdb.wal
 data/uploads/
 
 # Frontend build

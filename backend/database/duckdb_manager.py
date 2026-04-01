@@ -50,6 +50,39 @@ def init_db():
         except Exception:
             pass
 
+    # Phase 2A: per-break confidence + feature drivers
+    _NEW_INFERENCE_COLS = [
+        ("ml_confidence", "DOUBLE"),
+        ("ml_top_features", "VARCHAR"),
+    ]
+    for col, dtype in _NEW_INFERENCE_COLS:
+        try:
+            conn.execute(f"ALTER TABLE breaks ADD COLUMN IF NOT EXISTS {col} {dtype}")
+        except Exception:
+            pass
+
+    # Phase 2D: prediction feedback table
+    try:
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS feedback_id_seq")
+    except Exception:
+        pass
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS prediction_feedback (
+                id              BIGINT DEFAULT nextval('feedback_id_seq') PRIMARY KEY,
+                break_id        BIGINT,
+                trade_ref       VARCHAR,
+                rec_id          VARCHAR,
+                model_type      VARCHAR,
+                predicted_label VARCHAR,
+                actual_label    VARCHAR,
+                feedback_type   VARCHAR,
+                feedback_ts     TIMESTAMP DEFAULT current_timestamp
+            )
+        """)
+    except Exception:
+        pass
+
 
 def upsert_breaks(df: pd.DataFrame):
     if df.empty:

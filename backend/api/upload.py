@@ -16,8 +16,44 @@ from backend.pipeline.mapper import apply_mapping, auto_suggest
 
 upload_bp = Blueprint("upload", __name__)
 
+# Fallback SLA (days) and material thresholds when rec_configs has no entry
 SLA_MAP = {"CEQ": 3, "LnD": 5, "MTN": 7, "OTC": 1}
 THRESHOLD_ABS_GBP = {"CEQ": 300_000, "LnD": 500_000, "MTN": 750_000, "OTC": 250_000}
+
+
+def _get_rec_sla_threshold(rec_id: str, asset_class: str) -> tuple[int, float]:
+    """Return (sla_days, threshold_gbp) from rec_configs if available, else fallback."""
+    if rec_id:
+        cfg = query_df("SELECT escalation_sla_days, threshold_abs_gbp FROM rec_configs WHERE rec_id = ?", [rec_id])
+        if not cfg.empty:
+            row = cfg.iloc[0]
+            sla = int(row["escalation_sla_days"]) if pd.notna(row["escalation_sla_days"]) else SLA_MAP.get(asset_class, 3)
+            thr = float(row["threshold_abs_gbp"]) if pd.notna(row["threshold_abs_gbp"]) else THRESHOLD_ABS_GBP.get(asset_class, 300_000)
+            return sla, thr
+    return SLA_MAP.get(asset_class, 3), THRESHOLD_ABS_GBP.get(asset_class, 300_000)
+
+
+def _build_historical_lookup(trade_refs: list, rec_ids: list) -> dict:
+    """Batch lookup of first_seen_date for existing (trade_ref, rec_id) pairs.
+
+    Returns {(trade_ref, rec_id): first_seen_date} for all found matches.
+    """
+    if not trade_refs:
+        return {}
+    placeholders = ", ".join("?" for _ in trade_refs)
+    df = query_df(
+        f"""
+        SELECT trade_ref, rec_id, MIN(first_seen_date) AS first_seen_date
+        FROM breaks
+        WHERE trade_ref IN ({placeholders})
+        GROUP BY trade_ref, rec_id
+        """,
+        trade_refs,
+    )
+    result = {}
+    for _, row in df.iterrows():
+        result[(str(row["trade_ref"]), str(row["rec_id"]) if row["rec_id"] else "")] = row["first_seen_date"]
+    return result
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -101,6 +137,34 @@ def _enrich(df: pd.DataFrame, upload_type: str, rec_meta: dict) -> pd.DataFrame:
 
     df["last_seen_date"] = df["report_date"]
 
+    # ── Phase 1B: Historical break comparison & recurring flag ────────────
+    # Batch-lookup existing first_seen_date for all (trade_ref, rec_id) pairs
+    trade_refs = df["trade_ref"].dropna().unique().tolist()
+    historical = _build_historical_lookup(trade_refs, [])
+    df["recurring_break_flag"] = False
+    df["historical_match_confidence"] = 0.0
+
+    def _apply_history(row):
+        key_with_rec = (str(row["trade_ref"]), str(row["rec_id"]) if pd.notna(row.get("rec_id")) else "")
+        key_no_rec   = (str(row["trade_ref"]), "")
+        hist_date = historical.get(key_with_rec) or historical.get(key_no_rec)
+        if hist_date is not None:
+            return pd.Series({
+                "first_seen_date": hist_date,
+                "recurring_break_flag": True,
+                "historical_match_confidence": 1.0,
+            })
+        return pd.Series({
+            "first_seen_date": row["first_seen_date"],
+            "recurring_break_flag": False,
+            "historical_match_confidence": 0.0,
+        })
+
+    hist_cols = df.apply(_apply_history, axis=1)
+    df["first_seen_date"] = hist_cols["first_seen_date"]
+    df["recurring_break_flag"] = hist_cols["recurring_break_flag"]
+    df["historical_match_confidence"] = hist_cols["historical_match_confidence"]
+
     # ── abs_gbp: use file value if supplied, else calculate via FX ────────
     file_has_abs_gbp = (
         "abs_gbp" in df.columns
@@ -140,15 +204,38 @@ def _enrich(df: pd.DataFrame, upload_type: str, rec_meta: dict) -> pd.DataFrame:
     df["day_of_month"] = pd.to_datetime(df["report_date"]).dt.day
     df["period"] = pd.to_datetime(df["report_date"]).dt.strftime("%Y-%m")
 
-    # ── per-asset-class flags ─────────────────────────────────────────────
+    # ── Phase 1A + 1C: per-asset-class flags using rec_configs ───────────
+    # Pre-build SLA/threshold cache per unique (rec_id, asset_class) pair
+    _sla_cache: dict = {}
+
+    def _get_cached_sla_thr(rec_id, ac):
+        key = (str(rec_id) if pd.notna(rec_id) else "", str(ac) if pd.notna(ac) else "CEQ")
+        if key not in _sla_cache:
+            _sla_cache[key] = _get_rec_sla_threshold(key[0], key[1])
+        return _sla_cache[key]
+
     def _flags(row):
         ac = row.get("asset_class", "CEQ") or "CEQ"
-        threshold = THRESHOLD_ABS_GBP.get(ac, 300_000)
-        sla_days = SLA_MAP.get(ac, 3)
-        material = float(row.get("abs_gbp") or 0) > threshold
-        sla_breach = int(row.get("age_days") or 0) > sla_days
-        days_to_sla = sla_days - int(row.get("age_days") or 0)
+        rec_id = row.get("rec_id")
+        sla_days, threshold = _get_cached_sla_thr(rec_id, ac)
+        gbp = float(row.get("abs_gbp") or 0)
+        age = int(row.get("age_days") or 0)
+        material = gbp > threshold
+        sla_breach = age > sla_days
+        days_to_sla = sla_days - age
         escalation = "MANAGER" if sla_breach else ""
+
+        # Phase 1C: priority based on how overdue beyond SLA
+        days_overdue = max(0, age - sla_days)
+        if days_overdue > sla_days * 2:
+            jira_priority = "P1"
+        elif days_overdue > sla_days:
+            jira_priority = "P2"
+        elif sla_breach:
+            jira_priority = "P3"
+        else:
+            jira_priority = None
+
         return pd.Series({
             "material_flag": material,
             "threshold_breach": material,
@@ -156,11 +243,19 @@ def _enrich(df: pd.DataFrame, upload_type: str, rec_meta: dict) -> pd.DataFrame:
             "sla_breach": sla_breach,
             "days_to_sla": days_to_sla,
             "escalation_flag": escalation,
+            "jira_priority": jira_priority,
         })
 
     flags = df.apply(_flags, axis=1)
     for col in flags.columns:
         df[col] = flags[col]
+
+    # ── Phase 2C: MI upload — propagate issue_category → thematic ─────────
+    if upload_type == "monthly_mi" and "issue_category" in df.columns:
+        mask = df["thematic"].isna() if "thematic" in df.columns else pd.Series(True, index=df.index)
+        if "thematic" not in df.columns:
+            df["thematic"] = None
+        df.loc[mask, "thematic"] = df.loc[mask, "issue_category"]
 
     # ── boolean coercions ─────────────────────────────────────────────────
     for bool_col in ("fix_required", "bs_cert_ready", "root_cause_identified"):
@@ -172,16 +267,18 @@ def _enrich(df: pd.DataFrame, upload_type: str, rec_meta: dict) -> pd.DataFrame:
         ("status", "OPEN"),
         ("break_type", "UNKNOWN"),
         ("fix_required", False),
-        ("recurring_break_flag", False),
         ("cross_platform_match", False),
         ("bs_cert_ready", False),
         ("ml_risk_score", None),
         ("ml_rag_prediction", None),
+        ("ml_confidence", None),
+        ("ml_top_features", None),
         ("thematic", None),
         ("jira_ref", None),
         ("jira_desc", None),
+        ("jira_priority", None),
         ("epic", None),
-        # New D3S/MI extended fields
+        # D3S/MI extended fields
         ("entity", None),
         ("team", None),
         ("account_group", None),
@@ -310,35 +407,59 @@ def commit():
             try:
                 from backend.ml.trainer import score_new_breaks
                 scored = score_new_breaks(final_df.copy(), asset_class)
+
+                # Phase 2B: no-prediction for new/unseen breaks
+                if "recurring_break_flag" in scored.columns:
+                    new_mask = ~scored["recurring_break_flag"].fillna(False)
+                    # Only override if no model prediction was generated
+                    if "ml_rag_prediction" in scored.columns:
+                        no_pred_mask = new_mask & scored["ml_rag_prediction"].isna()
+                        scored.loc[no_pred_mask, "ml_rag_prediction"] = "no-prediction"
+                    if "thematic" in scored.columns:
+                        new_theme_mask = new_mask & (scored["thematic"].isna() | (scored["thematic"] == "new_theme") | (scored["thematic"] == ""))
+                        scored.loc[new_theme_mask, "thematic"] = "new_theme"
+
                 conn = get_conn()
                 rec_id_val = rec_meta.get("rec_id") if upload_type == "daily_break" else None
                 rows_scored_count = 0
 
                 for _, row in scored.iterrows():
                     tref = str(row.get("trade_ref", ""))
-                    risk_score = row.get("ml_risk_score")
-                    rag_pred   = row.get("ml_rag_prediction")
+                    risk_score  = row.get("ml_risk_score")
+                    rag_pred    = row.get("ml_rag_prediction")
+                    confidence  = row.get("ml_confidence")
+                    top_feats   = row.get("ml_top_features")
+                    thematic    = row.get("thematic")
                     if not tref:
                         continue
-                    if risk_score is not None and pd.notna(risk_score):
-                        if rec_id_val:
-                            conn.execute(
-                                "UPDATE breaks SET ml_risk_score = ?, ml_rag_prediction = ? WHERE trade_ref = ? AND rec_id = ?",
-                                [float(risk_score), rag_pred, tref, rec_id_val]
-                            )
-                        else:
-                            conn.execute(
-                                "UPDATE breaks SET ml_risk_score = ?, ml_rag_prediction = ? WHERE trade_ref = ?",
-                                [float(risk_score), rag_pred, tref]
-                            )
-                        rows_scored_count += 1
+                    if rec_id_val:
+                        conn.execute(
+                            """UPDATE breaks SET ml_risk_score = ?, ml_rag_prediction = ?,
+                               ml_confidence = ?, ml_top_features = ?, thematic = ?
+                               WHERE trade_ref = ? AND rec_id = ?""",
+                            [
+                                float(risk_score) if risk_score is not None and pd.notna(risk_score) else None,
+                                rag_pred, confidence, top_feats, thematic, tref, rec_id_val,
+                            ]
+                        )
+                    else:
+                        conn.execute(
+                            """UPDATE breaks SET ml_risk_score = ?, ml_rag_prediction = ?,
+                               ml_confidence = ?, ml_top_features = ?, thematic = ?
+                               WHERE trade_ref = ?""",
+                            [
+                                float(risk_score) if risk_score is not None and pd.notna(risk_score) else None,
+                                rag_pred, confidence, top_feats, thematic, tref,
+                            ]
+                        )
+                    rows_scored_count += 1
 
                 rows_scored = rows_scored_count
                 valid_scores = scored["ml_risk_score"].dropna() if "ml_risk_score" in scored.columns else pd.Series(dtype=float)
                 avg_risk_score = round(float(valid_scores.mean()), 4) if len(valid_scores) else None
 
                 if "ml_rag_prediction" in scored.columns:
-                    for lbl in ("R", "A", "G"):
+                    for lbl in ("R", "A", "G", "no-prediction"):
                         rag_predictions[lbl] = int((scored["ml_rag_prediction"] == lbl).sum())
 
                 if rows_scored_count > 0:

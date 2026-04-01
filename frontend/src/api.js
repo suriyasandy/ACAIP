@@ -79,8 +79,23 @@ export const saveMapping      = (body) => post("/schema/mapping", body);
 export const deleteMapping    = (name) => del(`/schema/mapping/${name}`);
 
 // ── Pipeline / ML ─────────────────────────────────────────────────────────────
-export const getHealth       = () => get("/health");
-export const getPipelineStatus = () => get("/pipeline/status");
-export const trainModels     = () => post("/pipeline/train");
-export const getModelStatus  = () => get("/pipeline/models");
-export const scoreBreaks     = () => post("/pipeline/score");
+export const getHealth            = () => get("/health");
+export const getPipelineStatus    = () => get("/pipeline/status");
+export const trainModels          = () => post("/pipeline/train");
+export const getModelStatus       = () => get("/pipeline/models");
+export const scoreBreaks          = () => post("/pipeline/score");
+export const updateDynamicThresholds = (lookback_days) => post("/pipeline/update-thresholds", { lookback_days: lookback_days || 28 });
+
+// ── Inferencing ───────────────────────────────────────────────────────────────
+export const getDailyInference    = (date, page, page_size) => get("/inference/daily", { date, page, page_size });
+export const getInferenceSummary  = (date) => get("/inference/summary", { date });
+
+// ── Feedback ──────────────────────────────────────────────────────────────────
+export const submitFeedback    = (body) => post("/feedback", body);
+export const getFeedback       = () => get("/feedback");
+export const getFeedbackSummary = () => get("/feedback/summary");
+
+// ── Rec Config ────────────────────────────────────────────────────────────────
+export const getRecConfigs  = () => get("/recs/config");
+export const saveRecConfig  = (body) => post("/recs/config", body);
+export const deleteRecConfig = (rec_id) => del(`/recs/config/${rec_id}`);

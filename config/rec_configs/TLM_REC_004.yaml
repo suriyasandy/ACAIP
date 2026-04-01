@@ -1,0 +1,14 @@
+active: true
+asset_class: Cash Equities
+d3s_asset_class: null
+emir_flag: false
+escalation_sla_days: 3
+jira_epic: EQ-BREAKS
+ml_model_id: rf_ceq
+rec_id: TLM_REC_004
+rec_name: Cash Equity Nostro Recon
+self_correct_days: 2
+source_platform: TLM
+threshold_abs_gbp: 300000
+threshold_pct: 0.005
+threshold_type: HYBRID

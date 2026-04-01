@@ -1,0 +1,14 @@
+active: true
+asset_class: Medium Term Notes
+d3s_asset_class: null
+emir_flag: false
+escalation_sla_days: 7
+jira_epic: MTN-BREAKS
+ml_model_id: rf_mtn
+rec_id: TLM_REC_029
+rec_name: Callable Bond Recon
+self_correct_days: 3
+source_platform: TLM
+threshold_abs_gbp: 750000
+threshold_pct: 0.002
+threshold_type: HYBRID

@@ -1,0 +1,29 @@
+source: D3S_MTN
+source_system_value: D3S-MTN
+d3s_asset_class: MTN
+columns:
+  trade_ref: NoteRef
+  break_value: Amort_Break
+  break_ccy: CCY
+  rec_id: RecID
+  rec_name: RecName
+  system_to_be_fixed: SystemSource
+  issue_category: IssueCategory
+  jira_ref: JiraRef
+  first_seen_date: IssueDt
+  last_seen_date: MaturityDt
+  report_date: ReportDate
+  status: Status
+break_type_default: COUPON
+asset_class_default: Medium Term Notes
+defaults:
+  source_system: D3S-MTN
+  asset_class: Medium Term Notes
+  d3s_asset_class: MTN
+  break_type: COUPON
+  emir_flag: false
+  cross_platform_match: false
+  recurring_break_flag: false
+  bs_cert_ready: false
+  historical_match_confidence: 0.0
+  epic: MTN-BREAKS

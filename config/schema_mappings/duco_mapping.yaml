@@ -1,0 +1,28 @@
+source: DUCO
+source_system_value: DUCO
+columns:
+  trade_ref: tradeId
+  break_type: breakCategory
+  break_value: breakAmount
+  break_ccy: currency
+  rec_name: reconciliationName
+  rec_id: reconciliationId
+  asset_class: assetClass
+  system_to_be_fixed: owningSystem
+  issue_category: issueType
+  jira_ref: jiraTicket
+  jira_desc: jiraSummary
+  epic: jiraEpic
+  fix_required: requiresFix
+  first_seen_date: firstObservedDate
+  last_seen_date: lastObservedDate
+  report_date: reportDate
+  status: breakStatus
+defaults:
+  source_system: DUCO
+  emir_flag: false
+  d3s_asset_class: ~
+  cross_platform_match: false
+  recurring_break_flag: false
+  bs_cert_ready: false
+  historical_match_confidence: 0.0

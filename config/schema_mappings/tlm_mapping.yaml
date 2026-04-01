@@ -1,0 +1,29 @@
+source: TLM
+source_system_value: TLM
+columns:
+  trade_ref: TRADE_REF
+  break_type: BREAK_TYPE_CODE
+  break_value: BREAK_AMT
+  break_ccy: CURRENCY
+  rec_name: REC_NAME
+  rec_id: REC_ID
+  asset_class: ASSET_CLASS
+  system_to_be_fixed: SYSTEM_SOURCE
+  issue_category: ISSUE_CAT
+  jira_ref: JIRA_REF
+  jira_desc: JIRA_DESCRIPTION
+  epic: JIRA_EPIC
+  fix_required: FIX_REQUIRED_FLAG
+  first_seen_date: FIRST_SEEN_DT
+  last_seen_date: LAST_SEEN_DT
+  report_date: REPORT_DATE
+  status: BREAK_STATUS
+  action: ACTION_TEXT
+defaults:
+  source_system: TLM
+  emir_flag: false
+  d3s_asset_class: ~
+  cross_platform_match: false
+  recurring_break_flag: false
+  bs_cert_ready: false
+  historical_match_confidence: 0.0

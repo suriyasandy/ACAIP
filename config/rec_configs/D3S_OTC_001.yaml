@@ -1,0 +1,14 @@
+active: true
+asset_class: OTC Derivatives
+d3s_asset_class: OTC
+emir_flag: true
+escalation_sla_days: 1
+jira_epic: OTC-BREAKS
+ml_model_id: rf_otc
+rec_id: D3S_OTC_001
+rec_name: D3S OTC Break Recon
+self_correct_days: 0
+source_platform: D3S-OTC
+threshold_abs_gbp: 250000
+threshold_pct: 0.0005
+threshold_type: HYBRID

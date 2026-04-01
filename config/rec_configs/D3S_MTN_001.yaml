@@ -1,0 +1,14 @@
+active: true
+asset_class: Medium Term Notes
+d3s_asset_class: MTN
+emir_flag: false
+escalation_sla_days: 7
+jira_epic: MTN-BREAKS
+ml_model_id: rf_mtn
+rec_id: D3S_MTN_001
+rec_name: D3S MTN Break Recon
+self_correct_days: 3
+source_platform: D3S-MTN
+threshold_abs_gbp: 750000
+threshold_pct: 0.002
+threshold_type: HYBRID

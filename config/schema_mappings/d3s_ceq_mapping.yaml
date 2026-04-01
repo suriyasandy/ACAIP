@@ -1,0 +1,29 @@
+source: D3S_CEQ
+source_system_value: D3S-CEQ
+d3s_asset_class: CEQ
+columns:
+  trade_ref: TradeID
+  break_value: MV_Break
+  break_ccy: Ccy
+  rec_id: RecID
+  rec_name: RecName
+  system_to_be_fixed: SystemSource
+  issue_category: IssueCategory
+  jira_ref: JiraRef
+  first_seen_date: TradeDate
+  last_seen_date: SettleDate
+  report_date: ReportDate
+  status: Status
+break_type_default: PRICE
+asset_class_default: Cash Equities
+defaults:
+  source_system: D3S-CEQ
+  asset_class: Cash Equities
+  d3s_asset_class: CEQ
+  break_type: PRICE
+  emir_flag: false
+  cross_platform_match: false
+  recurring_break_flag: false
+  bs_cert_ready: false
+  historical_match_confidence: 0.0
+  epic: EQ-BREAKS

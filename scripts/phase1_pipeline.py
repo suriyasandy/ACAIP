@@ -20,11 +20,6 @@ from typing import Optional
 
 import pandas as pd
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
 logger = logging.getLogger(__name__)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -181,7 +176,6 @@ def build_rec_flow(mi_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     rec_flow_df = (
         mi.groupby("TRADE REF")
         .agg(
-            Rec_List = ("Rec", lambda x: ordered_unique(list(x))),
             Rec_Flow = ("Rec", lambda x: " → ".join(ordered_unique(list(x)))),
         )
         .reset_index()
@@ -352,6 +346,11 @@ def main(
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     args = parse_args()
     main(
         cash_path=args.cash,

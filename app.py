@@ -100,28 +100,31 @@ hr { border-color: #1e2d4a; }
 
 # ─── AgGrid JS renderers ──────────────────────────────────────────────────────
 
-BOOL_RENDERER = JsCode("""
+# valueFormatter for bool columns — plain text, no HTML
+BOOL_VALUE_FORMATTER = "params.value === true || params.value === 'True' ? '\u2713  Yes' : '\u2717  No'"
+
+# cellStyle for bool columns — returns CSS object (works across all AG Grid versions)
+BOOL_CELL_STYLE = JsCode("""
 function(params) {
     if (params.value === true || params.value === 'True') {
-        return '<span style="background:#ef444422;border:1px solid #ef4444;color:#ef4444;'
-             + 'padding:1px 8px;border-radius:3px;font-size:11px;font-weight:800;">YES</span>';
+        return {background:'#ef444422', color:'#ef4444', fontWeight:'800',
+                borderRadius:'3px', padding:'1px 6px'};
     }
-    return '<span style="background:#10b98122;border:1px solid #10b981;color:#10b981;'
-         + 'padding:1px 8px;border-radius:3px;font-size:11px;">no</span>';
+    return {background:'#10b98122', color:'#10b981',
+            borderRadius:'3px', padding:'1px 6px'};
 }
 """)
 
-ROOT_SYSTEM_RENDERER = JsCode("""
+# cellStyle for Root_System — colour-codes by system name, no HTML string
+ROOT_CELL_STYLE = JsCode("""
 function(params) {
     const colours = {
-        FOBO:'#3b82f6', Fidessa:'#0ea5e9', FLARE:'#10b981',
-        Netted:'#06b6d4', COMPTA:'#8b5cf6', Sophis:'#a78bfa',
-        'P&L':'#f59e0b', Washbook:'#64748b'
+        'FOBO':'#3b82f6','Fidessa':'#0ea5e9','FLARE':'#10b981',
+        'Netted':'#06b6d4','COMPTA':'#8b5cf6','Sophis':'#a78bfa',
+        'P&L':'#f59e0b','Washbook':'#64748b'
     };
-    const v = params.value || 'Unknown';
-    const c = colours[v] || '#64748b';
-    return `<span style="background:${c}22;border:1px solid ${c}66;color:${c};`
-         + `padding:1px 8px;border-radius:3px;font-size:11px;font-weight:700;">${v}</span>`;
+    const c = colours[params.value] || '#64748b';
+    return {color: c, fontWeight: '700'};
 }
 """)
 
@@ -175,19 +178,35 @@ def run_pipeline(
 def build_aggrid(df: pd.DataFrame, height: int = 560) -> dict:
     gb = GridOptionsBuilder.from_dataframe(df)
     gb.configure_default_column(
-        filter=True, sortable=True, resizable=True, minWidth=90,
+        filter=True,
+        sortable=True,
+        resizable=True,
+        minWidth=90,
+        floatingFilter=True,        # search box under every column header
+        suppressMenu=False,         # keep the column menu (sort/filter/pin icons)
+        floatingFilterComponentParams={"suppressFilterButton": False},
     )
 
-    # Bool columns
+    # Bool columns — valueFormatter (plain text) + cellStyle (CSS object, no HTML)
     for col in ("Is_Recurring", "Journal_Used", "False_Closure"):
         if col in df.columns:
-            gb.configure_column(col, cellRenderer=BOOL_RENDERER,
-                                filter="agSetColumnFilter", width=130)
+            gb.configure_column(
+                col,
+                valueFormatter=BOOL_VALUE_FORMATTER,
+                cellStyle=BOOL_CELL_STYLE,
+                filter="agSetColumnFilter",
+                width=120,
+                floatingFilter=False,   # set filter not useful on bool; use the set filter via menu
+            )
 
-    # Root system chip
+    # Root system — plain text value, colour via cellStyle
     if "Root_System" in df.columns:
-        gb.configure_column("Root_System", cellRenderer=ROOT_SYSTEM_RENDERER,
-                            filter="agSetColumnFilter", width=120)
+        gb.configure_column(
+            "Root_System",
+            cellStyle=ROOT_CELL_STYLE,
+            filter="agSetColumnFilter",
+            width=120,
+        )
 
     # Numeric formatting
     for col in ("Total_Amount",):
@@ -195,7 +214,7 @@ def build_aggrid(df: pd.DataFrame, height: int = 560) -> dict:
             gb.configure_column(
                 col,
                 type=["numericColumn"],
-                valueFormatter="data.Total_Amount != null ? '£' + data.Total_Amount.toLocaleString('en-GB', {maximumFractionDigits:0}) : ''",
+                valueFormatter="data.Total_Amount != null ? '\u00a3' + data.Total_Amount.toLocaleString('en-GB', {maximumFractionDigits:0}) : ''",
                 width=130,
             )
     for col in ("Days_Active", "Total_Breaks", "BreakChainID"):
@@ -203,11 +222,15 @@ def build_aggrid(df: pd.DataFrame, height: int = 560) -> dict:
             gb.configure_column(col, type=["numericColumn"], width=110)
 
     # Wide columns
-    for col in ("Rec_Flow",):
-        if col in df.columns:
-            gb.configure_column(col, width=380, tooltipField=col)
+    if "Rec_Flow" in df.columns:
+        gb.configure_column("Rec_Flow", width=420, tooltipField="Rec_Flow",
+                            wrapText=False, autoHeight=False)
 
-    gb.configure_grid_options(rowClassRules=ROW_CLASS_RULES)
+    gb.configure_grid_options(
+        rowClassRules=ROW_CLASS_RULES,
+        suppressAutoSize=False,
+        enableCellTextSelection=True,
+    )
     gb.configure_selection("single", use_checkbox=False)
     gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=50)
 
@@ -497,16 +520,26 @@ with tab3:
         st.markdown(AGGRID_ROW_CSS, unsafe_allow_html=True)
 
         gb_fc = GridOptionsBuilder.from_dataframe(top_fc)
-        gb_fc.configure_default_column(filter=True, sortable=True, resizable=True, minWidth=90)
-        gb_fc.configure_column("Rec_Flow", width=380, tooltipField="Rec_Flow")
-        gb_fc.configure_column("Root_System", cellRenderer=ROOT_SYSTEM_RENDERER,
-                               filter="agSetColumnFilter", width=120)
-        gb_fc.configure_column("Total_Amount",
-                               type=["numericColumn"],
-                               valueFormatter="'£' + (data.Total_Amount || 0).toLocaleString('en-GB', {maximumFractionDigits:0})",
-                               width=130)
+        gb_fc.configure_default_column(
+            filter=True, sortable=True, resizable=True, minWidth=90,
+            floatingFilter=True, suppressMenu=False,
+        )
+        gb_fc.configure_column("Rec_Flow", width=420, tooltipField="Rec_Flow")
+        gb_fc.configure_column(
+            "Root_System",
+            cellStyle=ROOT_CELL_STYLE,
+            filter="agSetColumnFilter",
+            width=120,
+        )
+        gb_fc.configure_column(
+            "Total_Amount",
+            type=["numericColumn"],
+            valueFormatter="'\u00a3' + (data.Total_Amount || 0).toLocaleString('en-GB', {maximumFractionDigits:0})",
+            width=130,
+        )
         gb_fc.configure_column("Days_Active",  type=["numericColumn"], width=110)
         gb_fc.configure_column("Total_Breaks", type=["numericColumn"], width=110)
+        gb_fc.configure_grid_options(enableCellTextSelection=True, suppressAutoSize=False)
         gb_fc.configure_pagination(paginationAutoPageSize=False, paginationPageSize=20)
 
         AgGrid(

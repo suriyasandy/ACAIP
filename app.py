@@ -1,205 +1,219 @@
 """
-CASHFOARE ML False Break Detection — Streamlit Application
-==========================================================
-6-page multi-layout app:
-  1. Break Overview
-  2. ML Scoring
-  3. Drill-Down Analysis
-  4. Data Quality
-  5. Feedback & Retraining
-  6. Export
+CASHFOARE Phase 1 — Break Lifecycle & Rec Flow Dashboard
+=========================================================
+Streamlit app: upload Cash + MI CSVs → Phase 1 pipeline → KPIs + AgGrid MI
+
+Run:
+    streamlit run app.py
+
+Requires:
+    pip install streamlit plotly pandas streamlit-aggrid
 """
 
 from __future__ import annotations
 
-import io
-from datetime import datetime
+import sys
 from pathlib import Path
-from typing import Optional
 
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
 
-from modules.data_loader import PENCE_COLUMNS, log_upload, prepare_for_ingest
-from modules.db import (
-    get_connection,
-    get_kpis,
-    ingest_dataframe,
-    init_schema,
-    query_breaks,
-    update_risk_tiers,
+# ── import pipeline functions from scripts/phase1_pipeline.py ─────────────────
+sys.path.insert(0, str(Path(__file__).parent))
+from scripts.phase1_pipeline import (
+    DEFAULT_END,
+    DEFAULT_START,
+    MAX_AGE_DAYS,
+    RECURRING_MIN_DAYS,
+    ROOT_SYSTEM_MAP,
+    build_break_chains,
+    build_chain_summary,
+    build_final_summary,
+    build_journal_flags,
+    build_rec_flow,
+    filter_date_range,
+    standardize_cash,
+    standardize_mi,
 )
-from modules.dq_scorer import compute_and_persist_dq, compute_dq_scores, get_dq_summary
-from modules.false_break_model import load_model, train_from_dataframe
-from modules.feedback_store import (
-    get_feedback_count,
-    get_feedback_for_retraining,
-    load_feedback,
-    save_feedback,
-)
-from modules.ml_features import ALL_FEATURES, build_feature_matrix, get_feature_names
-from modules.scorer import compute_suppression_stats, score_and_persist, score_breaks
-from modules.shap_explainer import explain_break, get_top_features
-from modules.weak_labeller import label_breaks
 
-# ─────────────────────────────── constants ───────────────────────────────────
-
-VALID_ASSET_CLASSES = ["CEQ", "LnD", "MTN", "OTC"]
-DB_PATH = str(Path("data") / "cashfoare.duckdb")
-MODELS_DIR = "models"
-
-# AgGrid CSS injected once at startup
-AGGRID_CSS = """
-<style>
-.row-suppress td { background-color: #ffd6d6 !important; }
-.row-review   td { background-color: #fff3cd !important; }
-.row-escalate td { background-color: #d4edda !important; }
-.row-high-priority td { font-weight: bold !important; border-left: 4px solid #dc3545 !important; }
-.stMetric > div { background: #f8f9fa; border-radius: 8px; padding: 8px; }
-</style>
-"""
-
-# JS cellRenderer for risk_tier chip
-RISK_TIER_RENDERER = JsCode("""
-function(params) {
-    const colours = {Suppress:'#dc3545', Review:'#fd7e14', Escalate:'#28a745', Unscored:'#6c757d'};
-    const tier = params.value || 'Unscored';
-    const bg = colours[tier] || '#6c757d';
-    return `<span style="background:${bg};color:white;padding:2px 8px;border-radius:12px;font-size:12px">${tier}</span>`;
-}
-""")
-
-# JS rowClassRules for row-level colouring
-ROW_CLASS_RULES = {
-    "row-suppress":     "data.risk_tier === 'Suppress'",
-    "row-review":       "data.risk_tier === 'Review'",
-    "row-escalate":     "data.risk_tier === 'Escalate'",
-    "row-high-priority": "(data.governance_completeness_score < 0.5) || (data.days_overdue_vs_sla > 30)",
-}
-
-# JS cell style for dq_score gradient
-DQ_CELL_STYLE = JsCode("""
-function(params) {
-    if (params.value == null) return {};
-    const v = parseFloat(params.value);
-    if (v < 0.4) return {backgroundColor:'#f8d7da', color:'#721c24'};
-    if (v < 0.7) return {backgroundColor:'#fff3cd', color:'#856404'};
-    return {backgroundColor:'#d4edda', color:'#155724'};
-}
-""")
-
-PROB_CELL_STYLE = JsCode("""
-function(params) {
-    if (params.value == null) return {};
-    const v = parseFloat(params.value);
-    if (v > 0.80) return {backgroundColor:'#ffd6d6', fontWeight:'bold'};
-    if (v > 0.50) return {backgroundColor:'#fff3cd'};
-    return {backgroundColor:'#d4edda'};
-}
-""")
-
-
-# ─────────────────────────────── app init ────────────────────────────────────
-
+# ─── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="CASHFOARE ML | False Break Detection",
+    page_title="CASHFOARE Phase 1 — Break Lifecycle",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-st.markdown(AGGRID_CSS, unsafe_allow_html=True)
 
-# Initialise session state
-if "db_conn" not in st.session_state:
-    conn = get_connection(DB_PATH)
-    init_schema(conn)
-    st.session_state.db_conn = conn
+# ─── Global CSS (dark theme) ──────────────────────────────────────────────────
+st.markdown("""
+<style>
+.stApp { background-color: #080d1a; }
+.stApp > header { background-color: #080d1a; }
+section[data-testid="stSidebar"] {
+    background-color: #0a0f1e;
+    border-right: 1px solid #1e2d4a;
+}
+section[data-testid="stSidebar"] * { color: #94a3b8 !important; }
+.stTabs [data-baseweb="tab-list"] {
+    background-color: #0f1525;
+    border-radius: 8px;
+    padding: 4px;
+}
+.stTabs [data-baseweb="tab"] {
+    background-color: transparent;
+    border-radius: 6px;
+    color: #64748b;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 1px;
+}
+.stTabs [aria-selected="true"] {
+    background-color: #1e2d4a !important;
+    color: #f59e0b !important;
+}
+[data-testid="stMetric"] {
+    background: #0f1525;
+    border: 1px solid #1e2d4a;
+    border-radius: 8px;
+    padding: 12px 16px;
+}
+[data-testid="stMetricValue"] { color: #f1f5f9 !important; font-size: 26px !important; font-weight: 800 !important; }
+[data-testid="stMetricLabel"] { color: #64748b !important; font-size: 11px !important; }
+h1, h2, h3 { color: #f1f5f9 !important; }
+p, label, .stMarkdown { color: #94a3b8 !important; }
+.stSelectbox > div > div { background: #0f1525 !important; border-color: #1e2d4a !important; }
+hr { border-color: #1e2d4a; }
+.streamlit-expanderHeader { background: #0f1525 !important; color: #94a3b8 !important; }
+.streamlit-expanderContent { background: #080d1a !important; border: 1px solid #1e2d4a !important; }
+.stButton > button {
+    background: #0f1525; border: 1px solid #1e2d4a;
+    color: #94a3b8; border-radius: 6px; font-weight: 700;
+}
+.stButton > button:hover { border-color: #f59e0b; color: #f59e0b; }
+.stFileUploader { background: #0f1525; border: 1px dashed #1e2d4a; border-radius: 8px; }
+</style>
+""", unsafe_allow_html=True)
 
-if "fp_threshold" not in st.session_state:
-    st.session_state.fp_threshold = 0.80
-if "asset_filter" not in st.session_state:
-    st.session_state.asset_filter = []
-if "selected_break_id" not in st.session_state:
-    st.session_state.selected_break_id = None
-if "model_version" not in st.session_state:
-    st.session_state.model_version = "No model trained yet"
-if "asset_thresholds" not in st.session_state:
-    st.session_state.asset_thresholds = {}
-if "debug_mode" not in st.session_state:
-    st.session_state.debug_mode = False
+# ─── AgGrid JS renderers ──────────────────────────────────────────────────────
 
-conn = st.session_state.db_conn
+BOOL_RENDERER = JsCode("""
+function(params) {
+    if (params.value === true || params.value === 'True') {
+        return '<span style="background:#ef444422;border:1px solid #ef4444;color:#ef4444;'
+             + 'padding:1px 8px;border-radius:3px;font-size:11px;font-weight:800;">YES</span>';
+    }
+    return '<span style="background:#10b98122;border:1px solid #10b981;color:#10b981;'
+         + 'padding:1px 8px;border-radius:3px;font-size:11px;">no</span>';
+}
+""")
+
+ROOT_SYSTEM_RENDERER = JsCode("""
+function(params) {
+    const colours = {
+        FOBO:'#3b82f6', Fidessa:'#0ea5e9', FLARE:'#10b981',
+        Netted:'#06b6d4', COMPTA:'#8b5cf6', Sophis:'#a78bfa',
+        'P&L':'#f59e0b', Washbook:'#64748b'
+    };
+    const v = params.value || 'Unknown';
+    const c = colours[v] || '#64748b';
+    return `<span style="background:${c}22;border:1px solid ${c}66;color:${c};`
+         + `padding:1px 8px;border-radius:3px;font-size:11px;font-weight:700;">${v}</span>`;
+}
+""")
+
+ROW_CLASS_RULES = {
+    "row-false-closure": "data.False_Closure === true || data.False_Closure === 'True'",
+    "row-recurring":     "(data.Is_Recurring === true || data.Is_Recurring === 'True') && !data.False_Closure",
+}
+
+AGGRID_ROW_CSS = """
+<style>
+.ag-theme-streamlit .row-false-closure { background-color: #3a0d0d !important; }
+.ag-theme-streamlit .row-recurring     { background-color: #2a2200 !important; }
+</style>
+"""
+
+# ─── Caching ──────────────────────────────────────────────────────────────────
+
+@st.cache_data(show_spinner=False)
+def run_pipeline(
+    cash_bytes: bytes,
+    mi_bytes:   bytes,
+    start_str:  str,
+    end_str:    str,
+) -> pd.DataFrame:
+    """Cache by file content + date range. Re-runs only when inputs change."""
+    start_ts = pd.Timestamp(start_str)
+    end_ts   = pd.Timestamp(end_str)
+
+    raw_cash = pd.read_csv(__import__("io").BytesIO(cash_bytes))
+    raw_mi   = pd.read_csv(__import__("io").BytesIO(mi_bytes))
+
+    cash_df = standardize_cash(raw_cash)
+    mi_df   = standardize_mi(raw_mi)
+
+    cash_df = filter_date_range(cash_df, "Date", start_ts, end_ts)
+    mi_df   = filter_date_range(mi_df,   "Date", start_ts, end_ts)
+
+    if "Age Days" in mi_df.columns:
+        mi_df = mi_df[mi_df["Age Days"] <= MAX_AGE_DAYS]
+
+    cash_df       = build_break_chains(cash_df)
+    chain_summary = build_chain_summary(cash_df)
+    rec_flow_df, root_df = build_rec_flow(mi_df)
+    journal_df    = build_journal_flags(mi_df)
+
+    return build_final_summary(chain_summary, rec_flow_df, root_df, journal_df)
 
 
-# ─────────────────────────────── sidebar ─────────────────────────────────────
+# ─── AgGrid builder ───────────────────────────────────────────────────────────
 
-with st.sidebar:
-    st.image("https://via.placeholder.com/200x50?text=CASHFOARE+ML", use_container_width=True)
-    st.title("Navigation")
-    page = st.radio(
-        "Page",
-        ["Break Overview", "ML Scoring", "Drill-Down", "Data Quality",
-         "Feedback & Retraining", "Export"],
-        label_visibility="collapsed",
-    )
-    st.divider()
-    st.caption(f"Model: {st.session_state.model_version}")
-    st.caption(f"Threshold: {st.session_state.fp_threshold:.2f}")
-    st.session_state.debug_mode = st.toggle("Debug mode (show pseudo_label)", False)
-    st.divider()
-    n_breaks = conn.execute("SELECT COUNT(*) FROM breaks").fetchone()[0]
-    st.metric("Records in DB", f"{n_breaks:,}")
-
-
-# ─────────────────────────────── helpers ─────────────────────────────────────
-
-def _build_aggrid(
-    df: pd.DataFrame,
-    height: int = 550,
-    extra_cols: Optional[dict] = None,
-    hide_cols: Optional[list] = None,
-    selection_mode: str = "single",
-) -> dict:
-    """Build a fully-configured AgGrid with row colouring, filter, sort."""
+def build_aggrid(df: pd.DataFrame, height: int = 560) -> dict:
     gb = GridOptionsBuilder.from_dataframe(df)
     gb.configure_default_column(
-        filter=True,
-        sortable=True,
-        resizable=True,
-        minWidth=80,
-        wrapText=False,
+        filter=True, sortable=True, resizable=True, minWidth=90,
     )
 
-    # ML columns
-    if "false_break_prob" in df.columns:
-        gb.configure_column("false_break_prob", type=["numericColumn"],
-                            valueFormatter="data.false_break_prob != null ? data.false_break_prob.toFixed(2) : ''",
-                            cellStyle=PROB_CELL_STYLE, pinned=None)
-    if "risk_tier" in df.columns:
-        gb.configure_column("risk_tier", cellRenderer=RISK_TIER_RENDERER,
-                            filter="agSetColumnFilter")
-    if "dq_score" in df.columns:
-        gb.configure_column("dq_score", type=["numericColumn"],
-                            valueFormatter="data.dq_score != null ? data.dq_score.toFixed(2) : ''",
-                            cellStyle=DQ_CELL_STYLE)
+    # Bool columns
+    for col in ("Is_Recurring", "Journal_Used", "False_Closure"):
+        if col in df.columns:
+            gb.configure_column(col, cellRenderer=BOOL_RENDERER,
+                                filter="agSetColumnFilter", width=130)
 
-    if hide_cols:
-        for col in hide_cols:
-            if col in df.columns:
-                gb.configure_column(col, hide=True)
+    # Root system chip
+    if "Root_System" in df.columns:
+        gb.configure_column("Root_System", cellRenderer=ROOT_SYSTEM_RENDERER,
+                            filter="agSetColumnFilter", width=120)
 
-    if extra_cols:
-        for col, opts in extra_cols.items():
-            if col in df.columns:
-                gb.configure_column(col, **opts)
+    # Numeric formatting
+    for col in ("Total_Amount",):
+        if col in df.columns:
+            gb.configure_column(
+                col,
+                type=["numericColumn"],
+                valueFormatter="data.Total_Amount != null ? '£' + data.Total_Amount.toLocaleString('en-GB', {maximumFractionDigits:0}) : ''",
+                width=130,
+            )
+    for col in ("Days_Active", "Total_Breaks", "BreakChainID"):
+        if col in df.columns:
+            gb.configure_column(col, type=["numericColumn"], width=110)
+
+    # Wide columns
+    for col in ("Rec_Flow",):
+        if col in df.columns:
+            gb.configure_column(col, width=380, tooltipField=col)
+
+    # Hide helper columns
+    for col in ("Rec_List",):
+        if col in df.columns:
+            gb.configure_column(col, hide=True)
 
     gb.configure_grid_options(rowClassRules=ROW_CLASS_RULES)
-    gb.configure_selection(selection_mode=selection_mode, use_checkbox=False)
-    gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=100)
+    gb.configure_selection("single", use_checkbox=False)
+    gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=50)
 
     return AgGrid(
         df,
@@ -212,622 +226,315 @@ def _build_aggrid(
     )
 
 
-def _run_full_pipeline(df: pd.DataFrame) -> pd.DataFrame:
-    """DQ score → feature matrix → label → score."""
-    df = compute_dq_scores(df)
-    feat = build_feature_matrix(df)
-    for col in feat.columns:
-        if col not in df.columns:
-            df[col] = feat[col].values
-    df = label_breaks(df)
-    df = score_breaks(df, model_dir=MODELS_DIR, threshold=st.session_state.fp_threshold)
-    return df
+# ─── KPI helpers ─────────────────────────────────────────────────────────────
+
+def kpi_delta(n: int, total: int) -> str:
+    return f"{n / total * 100:.1f}%" if total else "—"
 
 
-# ─────────────────────────────── Page 1: Break Overview ───────────────────────
+# ─── Sidebar ──────────────────────────────────────────────────────────────────
 
-def page_break_overview() -> None:
-    st.header("Break Overview")
+with st.sidebar:
+    st.markdown("""
+    <div style='text-align:center;padding:12px 0 8px;'>
+      <div style='color:#f59e0b;font-size:12px;font-weight:800;letter-spacing:2px;'>CASHFOARE</div>
+      <div style='color:#64748b;font-size:9px;letter-spacing:1px;'>Phase 1 · Break Lifecycle</div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.divider()
 
-    # ── File Upload ──────────────────────────────────────────────────────────
-    uploaded = st.file_uploader(
-        "Upload MI Report CSV",
-        type=["csv"],
-        help="Upload the monthly MI report CSV (41 columns, amounts in pence)",
-    )
-    if uploaded:
-        with st.spinner("Ingesting and scoring..."):
-            raw = uploaded.read()
-            df, upload_hash = prepare_for_ingest(raw)
-            existing = conn.execute(
-                "SELECT COUNT(*) FROM upload_log WHERE upload_hash = ?", [upload_hash]
-            ).fetchone()[0]
-            if existing > 0:
-                st.warning("This file was already uploaded (duplicate detected). Re-ingesting.")
+    st.markdown("<div style='color:#64748b;font-size:9px;font-weight:700;letter-spacing:2px;margin-bottom:6px;'>DATA UPLOAD</div>",
+                unsafe_allow_html=True)
+    cash_file = st.file_uploader("Cash breaks CSV", type=["csv"], key="cash_upload",
+                                  help="Daily CASHFOARE breaks file (BREAK_DATE, TRADE_ID, PRODUCT, BREAK columns)")
+    mi_file   = st.file_uploader("MI report CSV",   type=["csv"], key="mi_upload",
+                                  help="Monthly MI report with Rec Name, TRADE REF, Date columns")
 
-            df_scored = _run_full_pipeline(df)
-            ingest_dataframe(conn, df_scored)
-            log_upload(conn, upload_hash, uploaded.name, len(df_scored))
-        st.success(f"Ingested {len(df_scored):,} breaks.")
+    st.divider()
+    st.markdown("<div style='color:#64748b;font-size:9px;font-weight:700;letter-spacing:2px;margin-bottom:6px;'>DATE RANGE</div>",
+                unsafe_allow_html=True)
+    col_s, col_e = st.columns(2)
+    start_date = col_s.date_input("From", value=DEFAULT_START.date(), key="start_date")
+    end_date   = col_e.date_input("To",   value=DEFAULT_END.date(),   key="end_date")
 
-    # ── Filters ──────────────────────────────────────────────────────────────
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        asset_filter = st.multiselect(
-            "Filter by Asset Class",
-            VALID_ASSET_CLASSES,
-            default=st.session_state.asset_filter or VALID_ASSET_CLASSES,
+    st.divider()
+    st.markdown("<div style='color:#64748b;font-size:9px;font-weight:700;letter-spacing:2px;margin-bottom:4px;'>FILTERS</div>",
+                unsafe_allow_html=True)
+    show_recurring_only  = st.checkbox("Recurring only",     value=False)
+    show_false_closure   = st.checkbox("False Closure only", value=False)
+
+    st.divider()
+    st.markdown("<div style='color:#64748b;font-size:9px;'>ACT · OMRC AI/ML · April 2026</div>",
+                unsafe_allow_html=True)
+
+# ─── Header ───────────────────────────────────────────────────────────────────
+
+st.markdown("""
+<div style='margin-bottom:4px;'>
+  <span style='background:#f59e0b22;border:1px solid #f59e0b55;color:#f59e0b;
+        border-radius:4px;padding:2px 10px;font-size:10px;font-weight:800;letter-spacing:2px;'>
+    CASHFOARE · PHASE 1 · BREAK LIFECYCLE
+  </span>
+</div>
+<h1 style='color:#f1f5f9;font-size:24px;font-weight:900;margin:4px 0 2px;'>
+  Break Lifecycle &amp; Rec Flow Analysis
+</h1>
+<p style='color:#475569;font-size:12px;margin:0 0 16px;'>
+  Lifecycle · Rec flow · Journal flag · False closure detection
+</p>
+""", unsafe_allow_html=True)
+
+# ─── Require both files ───────────────────────────────────────────────────────
+
+if not cash_file or not mi_file:
+    st.markdown("""
+    <div style='background:#0f1525;border:1px dashed #1e2d4a;border-radius:10px;
+                padding:40px;text-align:center;margin-top:20px;'>
+      <div style='font-size:32px;margin-bottom:12px;'>📂</div>
+      <div style='color:#94a3b8;font-size:14px;font-weight:700;'>Upload both CSV files in the sidebar to begin</div>
+      <div style='color:#475569;font-size:11px;margin-top:6px;'>Cash breaks CSV  +  MI report CSV</div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.stop()
+
+# ─── Run pipeline ─────────────────────────────────────────────────────────────
+
+with st.spinner("Running Phase 1 pipeline…"):
+    try:
+        cash_bytes = cash_file.read()
+        mi_bytes   = mi_file.read()
+        df = run_pipeline(
+            cash_bytes, mi_bytes,
+            str(start_date), str(end_date),
         )
-        st.session_state.asset_filter = asset_filter
+    except ValueError as exc:
+        st.error(f"Pipeline error: {exc}")
+        st.stop()
 
-    # ── KPI Cards (fragment) ─────────────────────────────────────────────────
-    @st.fragment
-    def kpi_cards() -> None:
-        kpis = get_kpis(conn)
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Total Breaks",   f"{kpis['total_breaks']:,}")
-        c2.metric("Suppressed",     f"{kpis['suppressed']:,}",
-                  delta=f"{kpis['suppressed_pct']}%",
-                  delta_color="inverse")
-        c3.metric("Review",         f"{kpis['review']:,}")
-        c4.metric("Escalate",       f"{kpis['escalate']:,}")
-        c5.metric("Value Suppressed", f"£{kpis['value_suppressed_gbp']:,.0f}")
-        st.caption(f"Avg DQ Score: {kpis['avg_dq_score']:.3f}")
+# ─── Apply sidebar filters ────────────────────────────────────────────────────
 
-    kpi_cards()
+df_view = df.copy()
+if show_recurring_only:
+    df_view = df_view[df_view["Is_Recurring"]]
+if show_false_closure:
+    df_view = df_view[df_view["False_Closure"]]
 
-    # ── AgGrid (fragment) ────────────────────────────────────────────────────
-    @st.fragment
-    def breaks_grid() -> None:
-        df = query_breaks(conn, asset_classes=asset_filter if asset_filter else None)
-        if df.empty:
-            st.info("No break data loaded. Upload an MI report CSV above.")
-            return
+# ─── KPI row ──────────────────────────────────────────────────────────────────
 
-        hide = [] if st.session_state.debug_mode else ["pseudo_label", "label_confidence"]
-        response = _build_aggrid(df, height=550, hide_cols=hide)
+total         = len(df)
+recurring     = int(df["Is_Recurring"].sum())
+journal_used  = int(df["Journal_Used"].sum())
+false_closure = int(df["False_Closure"].sum())
+total_amount  = df["Total_Amount"].sum()
 
-        selected = response.get("selected_rows")
-        if selected is not None and len(selected) > 0:
-            row = selected[0] if isinstance(selected, list) else selected.iloc[0]
-            bid = row.get("break_id") or (row["break_id"] if "break_id" in row else None)
-            if bid:
-                st.session_state.selected_break_id = bid
+k1, k2, k3, k4, k5 = st.columns(5)
+k1.metric("Total Chains",    f"{total:,}")
+k2.metric("Recurring",       f"{recurring:,}",     delta=kpi_delta(recurring,     total))
+k3.metric("Journal Used",    f"{journal_used:,}",  delta=kpi_delta(journal_used,  total))
+k4.metric("False Closure",   f"{false_closure:,}", delta=kpi_delta(false_closure, total),
+          delta_color="inverse")
+k5.metric("Total Break £",   f"£{total_amount:,.0f}")
 
-    breaks_grid()
+st.divider()
 
+# ─── Tabs ─────────────────────────────────────────────────────────────────────
 
-# ─────────────────────────────── Page 2: ML Scoring ───────────────────────────
+tab1, tab2, tab3 = st.tabs([
+    "  Break Chain MI",
+    "  Root System Analysis",
+    "  False Closure Detail",
+])
 
-def page_ml_scoring() -> None:
-    st.header("ML Scoring")
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — Break Chain MI (AgGrid)
+# ══════════════════════════════════════════════════════════════════════════════
 
-    # ── Threshold Controls (fragment) ────────────────────────────────────────
-    @st.fragment
-    def threshold_panel() -> None:
-        st.subheader("Suppression Threshold")
-        advanced = st.toggle("Advanced: per-asset-class thresholds")
-
-        if advanced:
-            new_thresholds: dict = {}
-            cols = st.columns(4)
-            for i, ac in enumerate(VALID_ASSET_CLASSES):
-                default_thr = st.session_state.asset_thresholds.get(ac, 0.80)
-                new_thresholds[ac] = cols[i].slider(
-                    f"{ac} threshold", 0.50, 0.99, float(default_thr), 0.01,
-                    key=f"thr_{ac}",
-                )
-            st.session_state.asset_thresholds = new_thresholds
-            update_risk_tiers(conn, asset_thresholds=new_thresholds)
-        else:
-            thr = st.slider(
-                "False Break Suppression Threshold",
-                min_value=0.50, max_value=0.99,
-                value=float(st.session_state.fp_threshold), step=0.01,
-            )
-            if abs(thr - st.session_state.fp_threshold) > 1e-4:
-                st.session_state.fp_threshold = thr
-                update_risk_tiers(conn, threshold=thr)
-                st.session_state.asset_thresholds = {}
-
-        # Live suppression stats
-        df = query_breaks(conn, columns=["risk_tier", "break_amount_gbp"])
-        if not df.empty:
-            stats = compute_suppression_stats(df, st.session_state.fp_threshold)
-            c1, c2, c3 = st.columns(3)
-            c1.metric(
-                "Suppressing",
-                f"{stats['suppressed']:,} breaks ({stats['suppressed_pct']}%)",
-            )
-            c2.metric("Saving from MI", f"£{stats['value_suppressed']:,.0f}")
-            c3.metric("Threshold", f"{stats['threshold']:.2f}")
-
-    threshold_panel()
-
-    # ── Score distributions (fragment) ───────────────────────────────────────
-    @st.fragment
-    def score_distributions() -> None:
-        st.subheader("Score Distributions by Asset Class")
-        df = conn.execute(
-            "SELECT asset_class, false_break_prob FROM breaks "
-            "WHERE false_break_prob IS NOT NULL"
-        ).df()
-        if df.empty:
-            st.info("No ML scores yet. Upload and score an MI report first.")
-            return
-
-        fig = px.histogram(
-            df, x="false_break_prob", color="asset_class",
-            facet_col="asset_class", nbins=40,
-            title="False Break Probability Distribution per Asset Class",
-            labels={"false_break_prob": "Probability"},
-            color_discrete_sequence=px.colors.qualitative.Set2,
+with tab1:
+    c_info, c_export = st.columns([5, 1])
+    with c_info:
+        n_shown = len(df_view)
+        st.markdown(
+            f"<div style='color:#64748b;font-size:10px;padding:6px 0;'>"
+            f"Showing <b style='color:#f1f5f9;'>{n_shown:,}</b> chains"
+            f"{' (filtered)' if n_shown < total else ''}"
+            f" · <span style='color:#ef4444;'>■</span> False Closure &nbsp;"
+            f"<span style='color:#f59e0b;'>■</span> Recurring</div>",
+            unsafe_allow_html=True,
         )
-        thr = st.session_state.fp_threshold
-        for i in range(len(VALID_ASSET_CLASSES)):
-            fig.add_vline(x=thr, line_dash="dash", line_color="red",
-                          annotation_text=f"threshold={thr:.2f}", row=1,
-                          col=i + 1 if i < 4 else "all")
-        st.plotly_chart(fig, use_container_width=True)
+    with c_export:
+        csv_bytes = df_view.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇ Export CSV",
+            data=csv_bytes,
+            file_name="phase1_break_chains.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
-    score_distributions()
+    st.markdown(AGGRID_ROW_CSS, unsafe_allow_html=True)
 
-    # ── Suppression gauge (fragment) ──────────────────────────────────────────
-    @st.fragment
-    def suppression_gauge() -> None:
-        row = conn.execute("""
-            SELECT
-                COUNT(*) AS total,
-                SUM(CASE WHEN risk_tier='Suppress' THEN 1 ELSE 0 END) AS suppressed
-            FROM breaks
-        """).fetchone()
-        total, suppressed = row[0] or 1, row[1] or 0
-        pct = suppressed / total * 100
+    if df_view.empty:
+        st.info("No chains match the current filters.")
+    else:
+        # Column order for display
+        display_cols = [c for c in [
+            "Trade", "Product", "Start_Date", "End_Date",
+            "Days_Active", "Total_Breaks", "Total_Amount",
+            "Is_Recurring", "Root_System", "Root_Rec",
+            "Rec_Flow", "Journal_Used", "False_Closure",
+            "BreakChainID", "Rec_List",
+        ] if c in df_view.columns]
 
-        fig = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=pct,
-            number={"suffix": "%"},
-            title={"text": "Suppression Rate"},
-            gauge={
-                "axis": {"range": [0, 100]},
-                "bar": {"color": "#dc3545"},
-                "steps": [
-                    {"range": [0, 30],  "color": "#d4edda"},
-                    {"range": [30, 60], "color": "#fff3cd"},
-                    {"range": [60, 100],"color": "#f8d7da"},
-                ],
-                "threshold": {
-                    "line": {"color": "black", "width": 2},
-                    "thickness": 0.75, "value": 50,
-                },
-            },
-        ))
-        fig.update_layout(height=300)
-        st.plotly_chart(fig, use_container_width=True)
+        build_aggrid(df_view[display_cols], height=580)
 
-    suppression_gauge()
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — Root System Analysis
+# ══════════════════════════════════════════════════════════════════════════════
 
+with tab2:
+    if df.empty:
+        st.info("No data to analyse.")
+    else:
+        root_summary = (
+            df.groupby("Root_System", dropna=False)
+            .agg(
+                Total_Chains    = ("BreakChainID",  "count"),
+                False_Closures  = ("False_Closure", "sum"),
+                Recurring       = ("Is_Recurring",  "sum"),
+                Journal_Used    = ("Journal_Used",  "sum"),
+                Total_Amount    = ("Total_Amount",  "sum"),
+            )
+            .reset_index()
+            .sort_values("Total_Chains", ascending=False)
+            .fillna({"Root_System": "Unknown"})
+        )
+        root_summary["FC_Rate"] = (
+            root_summary["False_Closures"] / root_summary["Total_Chains"].clip(lower=1) * 100
+        ).round(1)
 
-# ─────────────────────────────── Page 3: Drill-Down ───────────────────────────
+        col_bar, col_fc = st.columns(2)
 
-def page_drilldown() -> None:
-    st.header("Drill-Down Analysis")
-
-    # ── Drill-down AgGrid (fragment) ─────────────────────────────────────────
-    @st.fragment
-    def drilldown_grid() -> None:
-        asset_filter = st.session_state.asset_filter or None
-        df = query_breaks(conn, asset_classes=asset_filter)
-        if df.empty:
-            st.info("No data loaded.")
-            return
-
-        hide = [] if st.session_state.debug_mode else ["pseudo_label", "label_confidence"]
-        response = _build_aggrid(df, height=500, hide_cols=hide)
-
-        selected = response.get("selected_rows")
-        if selected is not None and len(selected) > 0:
-            row = selected[0] if isinstance(selected, list) else selected.iloc[0]
-            bid = row.get("break_id")
-            if bid:
-                st.session_state.selected_break_id = bid
-                st.success(f"Selected: {bid}")
-
-    drilldown_grid()
-
-    # ── SHAP waterfall panel (fragment) ──────────────────────────────────────
-    @st.fragment
-    def shap_panel() -> None:
-        break_id = st.session_state.selected_break_id
-        if not break_id:
-            st.info("Click a row in the table above to see its ML explanation.")
-            return
-
-        with st.expander("ML Explanation — SHAP Waterfall", expanded=True):
-            row_df = conn.execute(
-                "SELECT * FROM breaks WHERE break_id = ?", [break_id]
-            ).df()
-            if row_df.empty:
-                st.warning(f"Break {break_id} not found in database.")
-                return
-
-            feature_row = row_df.iloc[0]
-            prob = feature_row.get("false_break_prob", None)
-            ac   = str(feature_row.get("asset_class", ""))
-
-            model, explainer = load_model(ac, MODELS_DIR)
-            if explainer is None:
-                st.warning(
-                    f"No trained model for {ac} yet. "
-                    "Train a model from the Feedback & Retraining page first."
-                )
-                _show_rule_based_explanation(feature_row)
-                return
-
-            feature_names = get_feature_names(ac)
-            try:
-                fig = explain_break(explainer, feature_row, feature_names,
-                                    break_id=break_id,
-                                    false_break_prob=float(prob) if prob is not None else None)
-                st.plotly_chart(fig, use_container_width=True)
-
-                # Top-5 features
-                feat_array = [float(feature_row.get(f, np.nan)) for f in feature_names]
-                sv = explainer.shap_values(
-                    np.array(feat_array, dtype=np.float32).reshape(1, -1)
-                )
-                if isinstance(sv, list):
-                    sv = sv[1][0]
-                else:
-                    sv = sv[0]
-                top5 = get_top_features(sv, feature_names, n=5)
-                st.subheader("Top 5 Contributing Features")
-                cols = st.columns(5)
-                for i, (fname, fval) in enumerate(top5):
-                    raw_val = feature_row.get(fname, "N/A")
-                    cols[i].metric(
-                        label=fname,
-                        value=f"{float(raw_val):.3g}" if raw_val != "N/A" else "N/A",
-                        delta=f"SHAP: {fval:+.3f}",
-                    )
-            except Exception as e:
-                st.error(f"Could not generate SHAP explanation: {e}")
-
-    shap_panel()
-
-
-def _show_rule_based_explanation(row: pd.Series) -> None:
-    """Fallback: show rule-based signals when no SHAP model is available."""
-    st.write("**Rule-Based Signals:**")
-    signals = {
-        "Auto-close rate (R01)": row.get("rolling_7d_autoclose_rate"),
-        "Offsetting break (R02)": row.get("offsetting_break_exists"),
-        "Statistical outlier (R03)": row.get("is_statistical_outlier"),
-        "Break age (days)": row.get("break_age_days"),
-        "Governance score": row.get("governance_completeness_score"),
-        "DQ score": row.get("dq_score"),
-    }
-    for name, val in signals.items():
-        if val is not None:
-            st.write(f"- **{name}**: {val}")
-
-
-# ─────────────────────────────── Page 4: Data Quality ─────────────────────────
-
-def page_data_quality() -> None:
-    st.header("Data Quality")
-
-    @st.fragment
-    def dq_heatmap() -> None:
-        df = conn.execute("""
-            SELECT
-                asset_class,
-                ROUND(AVG(dq_score),3)                                               AS avg_dq_score,
-                ROUND(AVG(CASE WHEN owner IS NOT NULL THEN 1.0 ELSE 0.0 END),3)      AS owner_pct,
-                ROUND(AVG(CASE WHEN approver IS NOT NULL THEN 1.0 ELSE 0.0 END),3)   AS approver_pct,
-                ROUND(AVG(CASE WHEN status IS NOT NULL THEN 1.0 ELSE 0.0 END),3)     AS status_pct,
-                COUNT(*)                                                               AS row_count
-            FROM breaks
-            GROUP BY asset_class
-            ORDER BY asset_class
-        """).df()
-
-        if df.empty:
-            st.info("No data loaded yet.")
-            return
-
-        col1, col2 = st.columns(2)
-        with col1:
+        with col_bar:
             fig = px.bar(
-                df, x="asset_class", y="avg_dq_score",
-                color="avg_dq_score",
-                color_continuous_scale="RdYlGn",
-                range_color=[0, 1],
-                title="Average DQ Score by Asset Class",
-                labels={"avg_dq_score": "DQ Score"},
+                root_summary,
+                x="Root_System", y="Total_Chains",
+                color="Root_System",
+                text="Total_Chains",
+                title="Total Break Chains by Root System",
+                labels={"Total_Chains": "Chains", "Root_System": ""},
+                color_discrete_sequence=px.colors.qualitative.Set2,
             )
-            fig.update_layout(yaxis_range=[0, 1])
+            fig.update_traces(textposition="outside")
+            fig.update_layout(
+                paper_bgcolor="#0f1525", plot_bgcolor="#0f1525",
+                font=dict(color="#94a3b8", size=11),
+                showlegend=False,
+                xaxis=dict(gridcolor="#1e2d4a", tickfont=dict(color="#94a3b8")),
+                yaxis=dict(gridcolor="#1e2d4a", tickfont=dict(color="#94a3b8")),
+                height=340, margin=dict(l=10, r=10, t=40, b=10),
+            )
             st.plotly_chart(fig, use_container_width=True)
 
-        with col2:
-            melt = df.melt(
-                id_vars=["asset_class"],
-                value_vars=["owner_pct", "approver_pct", "status_pct"],
-                var_name="field", value_name="pct",
-            )
-            fig2 = px.bar(
-                melt, x="asset_class", y="pct", color="field",
+        with col_fc:
+            fig2 = go.Figure(data=[
+                go.Bar(name="False Closures", x=root_summary["Root_System"],
+                       y=root_summary["False_Closures"], marker_color="#ef4444"),
+                go.Bar(name="Recurring",      x=root_summary["Root_System"],
+                       y=root_summary["Recurring"],      marker_color="#f59e0b"),
+                go.Bar(name="Journal Used",   x=root_summary["Root_System"],
+                       y=root_summary["Journal_Used"],   marker_color="#3b82f6"),
+            ])
+            fig2.update_layout(
                 barmode="group",
-                title="Governance Field Completeness",
-                labels={"pct": "% Populated", "field": "Field"},
-                color_discrete_map={
-                    "owner_pct":    "#4CAF50",
-                    "approver_pct": "#2196F3",
-                    "status_pct":   "#FF9800",
-                },
+                title="False Closure / Recurring / Journal by Root System",
+                paper_bgcolor="#0f1525", plot_bgcolor="#0f1525",
+                font=dict(color="#94a3b8", size=11),
+                legend=dict(bgcolor="#0f1525", bordercolor="#1e2d4a", borderwidth=1,
+                            font=dict(color="#94a3b8")),
+                xaxis=dict(gridcolor="#1e2d4a", tickfont=dict(color="#94a3b8")),
+                yaxis=dict(gridcolor="#1e2d4a", tickfont=dict(color="#94a3b8"),
+                           title="Count"),
+                height=340, margin=dict(l=10, r=10, t=40, b=10),
             )
-            fig2.update_layout(yaxis_range=[0, 1])
             st.plotly_chart(fig2, use_container_width=True)
 
-        st.dataframe(df, use_container_width=True)
-
-    dq_heatmap()
-
-    @st.fragment
-    def low_dq_grid() -> None:
-        st.subheader("Lowest DQ Score Breaks (bottom 10%)")
-        df = conn.execute("""
-            SELECT break_id, asset_class, entity_id, break_amount_gbp,
-                   dq_score, risk_tier, false_break_prob,
-                   owner, approver, status
-            FROM breaks
-            WHERE dq_score IS NOT NULL
-            ORDER BY dq_score ASC
-            LIMIT 500
-        """).df()
-        if df.empty:
-            return
-        _build_aggrid(df, height=400)
-
-    low_dq_grid()
-
-
-# ─────────────────────────────── Page 5: Feedback & Retraining ────────────────
-
-def page_feedback() -> None:
-    st.header("Feedback & Retraining")
-
-    @st.fragment
-    def feedback_form() -> None:
-        st.subheader("Submit Analyst Feedback")
-        options = conn.execute(
-            "SELECT break_id, asset_class, false_break_prob, risk_tier "
-            "FROM breaks WHERE false_break_prob IS NOT NULL "
-            "ORDER BY false_break_prob DESC LIMIT 500"
-        ).df()
-
-        if options.empty:
-            st.info("No scored breaks available. Upload and score data first.")
-            return
-
-        opt_labels = [
-            f"{r['break_id']}  [{r['asset_class']}]  prob={r['false_break_prob']:.2f}  tier={r['risk_tier']}"
-            for _, r in options.iterrows()
-        ]
-        selected_idx = st.selectbox("Select Break", range(len(opt_labels)),
-                                    format_func=lambda i: opt_labels[i])
-        sel_row = options.iloc[selected_idx]
-
-        st.info(
-            f"**Break ID**: {sel_row['break_id']} | "
-            f"**Asset Class**: {sel_row['asset_class']} | "
-            f"**False Break Prob**: {sel_row['false_break_prob']:.3f} | "
-            f"**Risk Tier**: {sel_row['risk_tier']}"
+        # Summary table
+        st.markdown("<div style='color:#64748b;font-size:9px;font-weight:700;letter-spacing:2px;margin:8px 0 4px;'>ROOT SYSTEM SUMMARY</div>",
+                    unsafe_allow_html=True)
+        st.dataframe(
+            root_summary.style
+            .format({"Total_Amount": "£{:,.0f}", "FC_Rate": "{:.1f}%"})
+            .background_gradient(subset=["False_Closures"], cmap="Reds")
+            .background_gradient(subset=["Total_Chains"],   cmap="Blues"),
+            use_container_width=True,
+            height=280,
         )
 
-        analyst_id = st.text_input("Analyst ID", placeholder="e.g. jsmith")
-        true_label = st.radio(
-            "True Label",
-            ["Genuine Break", "False Break"],
-            horizontal=True,
-        )
-        label_int    = 1 if true_label == "False Break" else 0
-        override_flag = (sel_row["risk_tier"] == "Suppress") and (label_int == 0)
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — False Closure Detail
+# ══════════════════════════════════════════════════════════════════════════════
 
-        if st.button("Submit Feedback", type="primary"):
-            if not analyst_id:
-                st.error("Please enter your Analyst ID.")
-                return
-            report_month = conn.execute(
-                "SELECT report_month FROM breaks WHERE break_id = ?", [sel_row["break_id"]]
-            ).fetchone()
-            rm = report_month[0] if report_month else datetime.now().strftime("%Y-%m")
+with tab3:
+    fc_df = df[df["False_Closure"]].sort_values("Days_Active", ascending=False)
 
-            ok = save_feedback(
-                conn,
-                break_id       = str(sel_row["break_id"]),
-                analyst_label  = label_int,
-                analyst_id     = analyst_id,
-                model_prediction = float(sel_row["false_break_prob"]),
-                asset_class    = str(sel_row["asset_class"]),
-                report_month   = rm,
-                override_flag  = bool(override_flag),
-            )
-            if ok:
-                st.toast(f"Feedback saved for {sel_row['break_id']}!", icon="✅")
-            else:
-                st.error("Failed to save feedback. Check logs.")
-
-    feedback_form()
-
-    @st.fragment
-    def feedback_metrics() -> None:
-        st.subheader("Feedback Progress")
-        counts = get_feedback_count(conn)
-        cols = st.columns(4)
-        for i, ac in enumerate(VALID_ASSET_CLASSES):
-            ac_counts = counts.get(ac, {})
-            total_ac  = ac_counts.get("total", 0)
-            cols[i].metric(
-                label=ac,
-                value=f"{total_ac} labels",
-                delta=f"{ac_counts.get('false_break',0)} FB / {ac_counts.get('genuine',0)} Gen",
-            )
-            cols[i].progress(min(total_ac / 200, 1.0), text=f"{total_ac}/200")
-
-        total = counts.get("TOTAL", {}).get("total", 0)
-        st.caption(f"Total labels collected: {total} (need 200+ per class to retrain)")
-
-    feedback_metrics()
-
-    @st.fragment
-    def retrain_section() -> None:
-        st.subheader("Model Retraining")
-        st.info(f"Current model version: **{st.session_state.model_version}**")
-
-        counts = get_feedback_count(conn)
-        total  = counts.get("TOTAL", {}).get("total", 0)
-        can_retrain = total >= 200
-
-        if st.button(
-            "Retrain Model",
-            disabled=not can_retrain,
-            type="primary",
-            help="Requires 200+ analyst labels across all asset classes",
-        ):
-            with st.spinner("Training models for all asset classes..."):
-                trained = []
-                df_all = conn.execute("SELECT * FROM breaks").df()
-                fb_df  = load_feedback(conn)
-
-                for ac in VALID_ASSET_CLASSES:
-                    result = train_from_dataframe(df_all, asset_class=ac,
-                                                  model_dir=MODELS_DIR)
-                    if result:
-                        _, _, metrics = result
-                        trained.append(
-                            f"{ac}: AUC-ROC={metrics.get('cv_mean_auc_roc', 0):.3f}"
-                        )
-
-            if trained:
-                version = datetime.now().strftime("v%Y_%m")
-                st.session_state.model_version = version
-                st.success(f"Models trained ({version}):\n" + "\n".join(trained))
-            else:
-                st.warning("No asset classes had sufficient data for training.")
-
-    retrain_section()
-
-    # Feedback history table
-    @st.fragment
-    def feedback_history() -> None:
-        st.subheader("Feedback History")
-        df = load_feedback(conn)
-        if df.empty:
-            st.info("No feedback submitted yet.")
-            return
-        _build_aggrid(df, height=300)
-
-    feedback_history()
-
-
-# ─────────────────────────────── Page 6: Export ───────────────────────────────
-
-def page_export() -> None:
-    st.header("Export")
-
-    @st.fragment
-    def export_mi_report() -> None:
-        st.subheader("MI Report (Genuine + Review breaks)")
-        df = conn.execute(
-            "SELECT * FROM breaks WHERE risk_tier IN ('Escalate', 'Review')"
-        ).df()
-
-        if df.empty:
-            st.info("No Escalate/Review breaks to export.")
-            return
-
-        st.metric("Rows in MI export", f"{len(df):,}")
-
-        # Build CSV with metadata header
-        threshold   = st.session_state.fp_threshold
-        n_suppressed = conn.execute(
-            "SELECT COUNT(*) FROM breaks WHERE risk_tier='Suppress'"
-        ).fetchone()[0]
-        meta = (
-            f"# CASHFOARE MI Report Export\n"
-            f"# model_version={st.session_state.model_version}\n"
-            f"# suppression_threshold={threshold:.2f}\n"
-            f"# n_suppressed={n_suppressed}\n"
-            f"# n_genuine_review={len(df)}\n"
-            f"# report_generated={datetime.utcnow().isoformat()}Z\n"
-        )
-        csv_bytes  = (meta + df.to_csv(index=False)).encode("utf-8")
-        st.download_button(
-            "Download MI Report (CSV)",
-            data=csv_bytes,
-            file_name="mi_report.csv",
-            mime="text/csv",
+    if fc_df.empty:
+        st.markdown("""
+        <div style='background:#0f1525;border:1px solid #10b98133;border-radius:8px;
+                    padding:24px;text-align:center;'>
+          <div style='color:#10b981;font-size:13px;font-weight:700;'>✓ No False Closures detected</div>
+          <div style='color:#475569;font-size:11px;margin-top:4px;'>
+              All journalled recurring breaks cleared within the date range.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(
+            f"<div style='color:#ef4444;font-size:11px;font-weight:700;margin-bottom:8px;'>"
+            f"⚠ {len(fc_df)} False Closure chain(s) detected — journalled breaks that recurred</div>",
+            unsafe_allow_html=True,
         )
 
-    export_mi_report()
+        # Top-10 by Days_Active
+        top_fc = fc_df[["Trade", "Product", "Days_Active", "Total_Breaks",
+                         "Total_Amount", "Root_System", "Root_Rec", "Rec_Flow"]].head(20)
 
-    @st.fragment
-    def export_suppressed() -> None:
-        st.subheader("Suppressed Breaks Audit Trail")
-        df = conn.execute("""
-            SELECT
-                break_id,
-                asset_class,
-                false_break_prob,
-                risk_tier,
-                CAST(NOW() AS VARCHAR) AS suppression_timestamp,
-                dq_score,
-                mad_score,
-                governance_completeness_score,
-                report_month
-            FROM breaks
-            WHERE risk_tier = 'Suppress'
-        """).df()
+        st.markdown(AGGRID_ROW_CSS, unsafe_allow_html=True)
 
-        if df.empty:
-            st.info("No suppressed breaks to export.")
-            return
+        gb_fc = GridOptionsBuilder.from_dataframe(top_fc)
+        gb_fc.configure_default_column(filter=True, sortable=True, resizable=True, minWidth=90)
+        gb_fc.configure_column("Rec_Flow", width=380, tooltipField="Rec_Flow")
+        gb_fc.configure_column("Root_System", cellRenderer=ROOT_SYSTEM_RENDERER,
+                               filter="agSetColumnFilter", width=120)
+        gb_fc.configure_column("Total_Amount",
+                               type=["numericColumn"],
+                               valueFormatter="'£' + (data.Total_Amount || 0).toLocaleString('en-GB', {maximumFractionDigits:0})",
+                               width=130)
+        gb_fc.configure_column("Days_Active",  type=["numericColumn"], width=110)
+        gb_fc.configure_column("Total_Breaks", type=["numericColumn"], width=110)
+        gb_fc.configure_pagination(paginationAutoPageSize=False, paginationPageSize=20)
 
-        st.metric("Suppressed breaks", f"{len(df):,}")
-        ym = datetime.now().strftime("%Y_%m")
-        filename = f"suppressed_breaks_{ym}.csv"
-
-        csv_bytes = df.to_csv(index=False).encode("utf-8")
-
-        # Also write to disk (audit trail requirement)
-        Path("exports").mkdir(exist_ok=True)
-        with open(f"exports/{filename}", "wb") as f:
-            f.write(csv_bytes)
-
-        st.download_button(
-            f"Download {filename}",
-            data=csv_bytes,
-            file_name=filename,
-            mime="text/csv",
+        AgGrid(
+            top_fc,
+            gridOptions=gb_fc.build(),
+            update_mode=GridUpdateMode.NO_UPDATE,
+            allow_unsafe_jscode=True,
+            theme="streamlit",
+            height=420,
+            fit_columns_on_grid_load=False,
         )
-        st.caption(f"Also saved to: exports/{filename}")
 
-    export_suppressed()
-
-
-# ─────────────────────────────── page router ─────────────────────────────────
-
-if page == "Break Overview":
-    page_break_overview()
-elif page == "ML Scoring":
-    page_ml_scoring()
-elif page == "Drill-Down":
-    page_drilldown()
-elif page == "Data Quality":
-    page_data_quality()
-elif page == "Feedback & Retraining":
-    page_feedback()
-elif page == "Export":
-    page_export()
+        # Days Active distribution
+        fig3 = px.histogram(
+            fc_df, x="Days_Active", nbins=20,
+            title="False Closure — Days Active Distribution",
+            labels={"Days_Active": "Days Active", "count": "Chains"},
+            color_discrete_sequence=["#ef4444"],
+        )
+        fig3.update_layout(
+            paper_bgcolor="#0f1525", plot_bgcolor="#0f1525",
+            font=dict(color="#94a3b8", size=11),
+            xaxis=dict(gridcolor="#1e2d4a", tickfont=dict(color="#94a3b8")),
+            yaxis=dict(gridcolor="#1e2d4a", tickfont=dict(color="#94a3b8")),
+            height=260, margin=dict(l=10, r=10, t=40, b=10),
+        )
+        st.plotly_chart(fig3, use_container_width=True)

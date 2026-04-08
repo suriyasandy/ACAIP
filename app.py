@@ -12,6 +12,7 @@ Requires:
 
 from __future__ import annotations
 
+import io
 import sys
 from pathlib import Path
 
@@ -22,7 +23,7 @@ import streamlit as st
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
 
 # ── import pipeline functions from scripts/phase1_pipeline.py ─────────────────
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scripts.phase1_pipeline import (
     DEFAULT_END,
     DEFAULT_START,
@@ -149,8 +150,8 @@ def run_pipeline(
     start_ts = pd.Timestamp(start_str)
     end_ts   = pd.Timestamp(end_str)
 
-    raw_cash = pd.read_csv(__import__("io").BytesIO(cash_bytes))
-    raw_mi   = pd.read_csv(__import__("io").BytesIO(mi_bytes))
+    raw_cash = pd.read_csv(io.BytesIO(cash_bytes))
+    raw_mi   = pd.read_csv(io.BytesIO(mi_bytes))
 
     cash_df = standardize_cash(raw_cash)
     mi_df   = standardize_mi(raw_mi)
@@ -205,11 +206,6 @@ def build_aggrid(df: pd.DataFrame, height: int = 560) -> dict:
     for col in ("Rec_Flow",):
         if col in df.columns:
             gb.configure_column(col, width=380, tooltipField=col)
-
-    # Hide helper columns
-    for col in ("Rec_List",):
-        if col in df.columns:
-            gb.configure_column(col, hide=True)
 
     gb.configure_grid_options(rowClassRules=ROW_CLASS_RULES)
     gb.configure_selection("single", use_checkbox=False)
@@ -307,8 +303,8 @@ with st.spinner("Running Phase 1 pipeline…"):
             cash_bytes, mi_bytes,
             str(start_date), str(end_date),
         )
-    except ValueError as exc:
-        st.error(f"Pipeline error: {exc}")
+    except Exception as exc:
+        st.error(f"Pipeline error — check your CSV columns match the expected format.\n\n{exc}")
         st.stop()
 
 # ─── Apply sidebar filters ────────────────────────────────────────────────────
@@ -382,7 +378,7 @@ with tab1:
             "Days_Active", "Total_Breaks", "Total_Amount",
             "Is_Recurring", "Root_System", "Root_Rec",
             "Rec_Flow", "Journal_Used", "False_Closure",
-            "BreakChainID", "Rec_List",
+            "BreakChainID",
         ] if c in df_view.columns]
 
         build_aggrid(df_view[display_cols], height=580)
